@@ -1,0 +1,28 @@
+[package]
+name = "corvus-server"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "corvus-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.7", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+argon2 = "0.5"
+rand_core = "0.10"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+toml = "1"
+sha1 = "0.11"
+hex = "0.4"
+rand = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-util = { version = "0.7", features = ["io"] }

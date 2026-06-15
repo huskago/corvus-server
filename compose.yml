@@ -1,0 +1,21 @@
+services:
+  corvus-server:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - ADMIN_PASSWORD=changeme
+      - CORVUS_CONFIG_PATH=/data/config.toml
+      - CORVUS_SERVER__PUBLIC_URL=http://localhost:8080
+      # For HTTPS, put this service behind a reverse proxy (nginx, Caddy, Traefik)
+      # and set PUBLIC_URL to your HTTPS domain, e.g.:
+      # - CORVUS_SERVER__PUBLIC_URL=https://launcher.example.com
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

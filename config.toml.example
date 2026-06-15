@@ -1,0 +1,11 @@
+[server]
+port = 8080
+data_dir = "./data"
+public_url = "http://localhost:8080"
+max_upload_mb = 512          # maximum size per uploaded file (jar/zip)
+
+[auth]
+username = "admin"
+password_hash = ""           # filled automatically on first run
+jwt_secret = ""              # filled automatically on first run
+jwt_expiry_secs = 86400      # token validity: 86400 = 24h
