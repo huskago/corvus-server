@@ -4,6 +4,7 @@ pub mod instances;
 pub mod manifest;
 pub mod news;
 pub mod public;
+pub mod updates;
 
 use axum::{
     extract::{DefaultBodyLimit, FromRequestParts},
@@ -45,6 +46,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/news.json", get(public::get_news))
         .route("/{game_dir}/manifest.json", get(public::get_manifest))
         .route("/files/{game_dir}/{filename}", get(public::get_file))
+        .route("/updates/latest.json", get(updates::latest_json))
+        .route("/updates/{platform}/{filename}", get(updates::get_update_file))
         .route("/admin", get(public::serve_admin))
         .route("/admin/{*path}", get(public::serve_admin))
         .route("/api/auth/login", post(auth::login))
@@ -75,6 +78,15 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/admin/instances/{id}/files", get(manifest::list_files))
         .route("/api/admin/dashboard", get(dashboard::get_dashboard))
+        .route(
+            "/api/admin/updates",
+            get(updates::get_release).put(updates::put_release_meta),
+        )
+        .route(
+            "/api/admin/updates/{platform}/upload",
+            post(updates::upload_platform).layer(DefaultBodyLimit::disable()),
+        )
+        .route("/api/admin/updates/{platform}", delete(updates::delete_platform))
         .with_state(state)
         .layer(
             CorsLayer::new()

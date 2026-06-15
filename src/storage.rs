@@ -1,5 +1,5 @@
 use std::{collections::HashMap, path::Path};
-use crate::models::{FileMeta, InstanceInfo, InstanceManifest, NewsItem};
+use crate::models::{FileMeta, InstanceInfo, InstanceManifest, LauncherRelease, NewsItem};
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
@@ -91,6 +91,14 @@ pub async fn write_files_index(
     index: &HashMap<String, FileMeta>,
 ) -> Result<(), String> {
     write_json(&files_index_path(data_dir, game_dir), index).await
+}
+
+pub async fn read_launcher_release(data_dir: &Path) -> Result<LauncherRelease, String> {
+    read_json(&data_dir.join("launcher-release.json")).await
+}
+
+pub async fn write_launcher_release(data_dir: &Path, release: &LauncherRelease) -> Result<(), String> {
+    write_json(&data_dir.join("launcher-release.json"), release).await
 }
 
 pub async fn upsert_file_meta(

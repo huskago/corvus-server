@@ -46,6 +46,10 @@ impl AppState {
         self.instance_dir(game_dir_name).join("files")
     }
 
+    pub fn updates_dir(&self, platform: &str) -> PathBuf {
+        self.data_dir.join("launcher-updates").join(platform)
+    }
+
     pub fn check_login_rate_limit(&self, ip: IpAddr) -> Result<(), AppError> {
         const MAX_ATTEMPTS: u32 = 10;
         const WINDOW_SECS: u64 = 60;

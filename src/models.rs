@@ -143,3 +143,18 @@ pub struct FileListEntry {
     pub size: u64,
     pub url: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LauncherRelease {
+    pub version: String,
+    pub notes: String,
+    pub pub_date: String,
+    pub platforms: std::collections::HashMap<String, LauncherPlatformEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LauncherPlatformEntry {
+    pub url: String,
+    pub signature: String,
+}

@@ -657,6 +657,7 @@
         <button class="nav-icon active" title="Dashboard" onclick="nav('dashboard')">&#128202;</button>
         <button class="nav-icon" title="Instances" onclick="nav('instances')">&#128187;</button>
         <button class="nav-icon" title="News" onclick="nav('news')">&#128240;</button>
+        <button class="nav-icon" title="Updates" onclick="nav('updates')">&#128228;</button>
         <div class="sidebar-bottom">
             <button class="nav-icon" title="Settings" onclick="nav('settings')">&#9881;</button>
             <button class="nav-icon" title="Sign out" onclick="signOut()">&#8617;</button>
@@ -822,6 +823,31 @@
             <div id="news-list"></div>
         </div>
 
+        <div id="page-updates" class="page">
+            <div class="page-header">
+                <div>
+                    <div class="page-title">Launcher Updates</div>
+                    <div class="page-sub">Hosts <code style="color:var(--accent)">/updates/latest.json</code> for the Tauri auto-updater</div>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="saveReleaseMeta()">Save Metadata</button>
+            </div>
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);
+          padding:20px 24px;margin-bottom:20px">
+                <div class="section-title">Release Metadata</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+                    <div><label>Version *</label><input class="fi" id="up-version" placeholder="1.2.0"></div>
+                    <div><label>Pub Date *</label><input class="fi" id="up-date" type="datetime-local"></div>
+                    <div style="grid-column:1/-1"><label>Release Notes</label>
+                        <textarea class="fi" id="up-notes"
+                                  style="min-height:80px;resize:vertical;font-family:inherit"
+                                  placeholder="What changed in this version..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="section-title">Platform Binaries</div>
+            <div id="up-platforms"></div>
+        </div>
+
         <div id="page-settings" class="page">
             <div class="page-header">
                 <div class="page-title">Settings</div>
@@ -934,6 +960,7 @@
         if (page === 'dashboard') await loadDashboard();
         if (page === 'instances') await loadInstances();
         if (page === 'news') await loadNews();
+        if (page === 'updates') await loadUpdates();
         if (page === 'settings') loadSettings();
     }
 
@@ -1458,6 +1485,139 @@
             await DELETE('/api/admin/news/' + id);
             toast('Deleted');
             await loadNews();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    }
+
+    // Updates
+    let releaseData = null;
+    const UP_PLATFORMS = [
+        {id: 'windows-x86_64', label: 'Windows x64', hint: '.exe / .msi / .nsis.zip'},
+        {id: 'linux-x86_64', label: 'Linux x64', hint: '.AppImage.tar.gz'},
+        {id: 'darwin-aarch64', label: 'macOS Apple Silicon', hint: '.app.tar.gz'},
+        {id: 'darwin-x86_64', label: 'macOS Intel', hint: '.app.tar.gz'},
+    ];
+
+    async function loadUpdates() {
+        try {
+            releaseData = await GET('/api/admin/updates') || {};
+            document.getElementById('up-version').value = releaseData.version || '';
+            document.getElementById('up-notes').value = releaseData.notes || '';
+            if (releaseData.pubDate) {
+                document.getElementById('up-date').value = releaseData.pubDate.slice(0, 16);
+            }
+            renderPlatforms();
+        } catch (e) {
+            toast('Failed to load updates: ' + e.message, 'error');
+        }
+    }
+
+    async function saveReleaseMeta() {
+        const version = document.getElementById('up-version').value.trim();
+        const notes = document.getElementById('up-notes').value.trim();
+        const dateVal = document.getElementById('up-date').value;
+        if (!version) {
+            toast('Version is required', 'error');
+            return;
+        }
+        try {
+            await PUT('/api/admin/updates', {
+                version,
+                notes,
+                pubDate: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString(),
+            });
+            toast('Release metadata saved');
+            await loadUpdates();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    }
+
+    function renderPlatforms() {
+        const platforms = (releaseData && releaseData.platforms) || {};
+        document.getElementById('up-platforms').innerHTML = UP_PLATFORMS.map(p => {
+            const entry = platforms[p.id];
+            const filename = entry ? entry.url.split('/').pop() : null;
+            const key = p.id.replace(/-/g, '_');
+            return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);
+              padding:16px 20px;margin-bottom:10px">
+              <div style="display:flex;align-items:center;gap:12px">
+                <div style="flex:1">
+                  <div style="font-weight:600;font-size:13px">${p.label}</div>
+                  <div style="font-size:11px;color:var(--muted);margin-top:2px">${p.id}</div>
+                </div>
+                ${entry
+                ? `<span class="badge badge-live">&#10003; ${esc(filename)}</span>
+                   <button class="btn btn-ghost btn-sm" onclick="toggleUpForm('${p.id}')">Re-upload</button>
+                   <button class="btn btn-danger btn-sm" onclick="delPlatform('${p.id}')">Remove</button>`
+                : `<span style="color:var(--muted);font-size:12px">Not uploaded</span>
+                   <button class="btn btn-primary btn-sm" onclick="toggleUpForm('${p.id}')">Upload</button>`}
+              </div>
+              <div id="upf-${key}" style="display:none;margin-top:14px;
+                border-top:1px solid var(--border);padding-top:14px">
+                <div style="margin-bottom:10px">
+                  <label>Binary File <span style="color:var(--muted);font-weight:400;text-transform:none">${p.hint}</span></label>
+                  <input type="file" class="fi" id="upf-file-${key}" style="padding:6px">
+                </div>
+                <div style="margin-bottom:12px">
+                  <label>Signature <span style="color:var(--muted);font-weight:400;text-transform:none">(content of .sig file)</span></label>
+                  <textarea class="fi" id="upf-sig-${key}"
+                    style="min-height:56px;resize:vertical;font-family:monospace;font-size:11px"
+                    placeholder="dW50cnVzdGVkIGNvbW1lbnQ6..."></textarea>
+                </div>
+                <div style="display:flex;gap:8px">
+                  <button class="btn btn-primary btn-sm" onclick="uploadPlatform('${p.id}')">Upload</button>
+                  <button class="btn btn-ghost btn-sm" onclick="toggleUpForm('${p.id}')">Cancel</button>
+                </div>
+              </div>
+            </div>`;
+        }).join('');
+    }
+
+    function toggleUpForm(platformId) {
+        const el = document.getElementById('upf-' + platformId.replace(/-/g, '_'));
+        if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+
+    async function uploadPlatform(platformId) {
+        const key = platformId.replace(/-/g, '_');
+        const fileInput = document.getElementById('upf-file-' + key);
+        const sig = (document.getElementById('upf-sig-' + key).value || '').trim();
+        if (!fileInput || !fileInput.files.length) {
+            toast('Select a file first', 'error');
+            return;
+        }
+        if (!sig) {
+            toast('Signature is required', 'error');
+            return;
+        }
+        const form = new FormData();
+        form.append('file', fileInput.files[0]);
+        form.append('signature', sig);
+        try {
+            const r = await fetch('/api/admin/updates/' + platformId + '/upload', {
+                method: 'POST',
+                headers: {'Authorization': 'Bearer ' + S.token},
+                body: form,
+            });
+            if (!r.ok) {
+                const e = await r.json().catch(() => ({}));
+                throw new Error(e.error || r.statusText);
+            }
+            toast('Uploaded ' + platformId);
+            await loadUpdates();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    }
+
+    async function delPlatform(platformId) {
+        if (!confirm('Remove ' + platformId + ' binary?')) return;
+        try {
+            await DELETE('/api/admin/updates/' + platformId);
+            toast('Removed');
+            await loadUpdates();
         } catch (e) {
             toast(e.message, 'error');
         }
