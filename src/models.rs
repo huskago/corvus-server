@@ -14,6 +14,16 @@ pub struct InstanceInfo {
     pub update_url: String,
     pub server_ip: Option<String>,
     pub maintenance: bool,
+    #[serde(default)]
+    pub changelog: Vec<ChangelogEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangelogEntry {
+    pub version: String,
+    pub date: String,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
