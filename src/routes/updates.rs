@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
+use reqwest::Client;
 
 use crate::{error::AppError, models::LauncherPlatformEntry, routes::AuthUser, state::AppState, storage};
 
@@ -194,6 +195,58 @@ pub async fn upload_platform(
         .await
         .map_err(AppError::Storage)?;
 
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct TriggerBuildBody {
+    pub notes: Option<String>,
+}
+
+pub async fn trigger_build(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Json(body): Json<TriggerBuildBody>,
+) -> Result<StatusCode, AppError> {
+    let config = state.config.read().await;
+    let gh = &config.github;
+
+    if gh.pat.is_empty() || gh.repo.is_empty() {
+        return Err(AppError::BadRequest(
+            "GitHub PAT or repo not configured. Set github.pat and github.repo in config.toml or via CORVUS_GITHUB__PAT / CORVUS_GITHUB__REPO env vars.".into(),
+        ));
+    }
+
+    let url = format!(
+        "https://api.github.com/repos/{}/actions/workflows/{}/dispatches",
+        gh.repo, gh.workflow
+    );
+
+    let res = Client::new()
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", gh.pat))
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header("User-Agent", "corvus-server")
+        .json(&json!({
+            "ref": gh.branch,
+            "inputs": {
+                "release_notes": body.notes.unwrap_or_default()
+            }
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("GitHub API request failed: {e}")))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(AppError::Internal(format!(
+            "GitHub API returned {status}: {text}"
+        )));
+    }
+
+    tracing::info!("Build triggered on GitHub Actions ({}/{})", gh.repo, gh.workflow);
     Ok(StatusCode::NO_CONTENT)
 }
 

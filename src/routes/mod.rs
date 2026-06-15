@@ -87,6 +87,7 @@ pub fn build_router(state: AppState) -> Router {
             post(updates::upload_platform).layer(DefaultBodyLimit::disable()),
         )
         .route("/api/admin/updates/{platform}", delete(updates::delete_platform))
+        .route("/api/admin/trigger-build", post(updates::trigger_build))
         .with_state(state)
         .layer(
             CorsLayer::new()

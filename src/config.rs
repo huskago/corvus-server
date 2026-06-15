@@ -10,7 +10,22 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub server: ServerConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub github: GitHubConfig,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitHubConfig {
+    pub pat: String,
+    pub repo: String,
+    #[serde(default = "default_workflow")]
+    pub workflow: String,
+    #[serde(default = "default_branch")]
+    pub branch: String,
+}
+
+fn default_workflow() -> String { "release.yml".into() }
+fn default_branch() -> String { "main".into() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -31,6 +46,7 @@ pub struct AuthConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            github: GitHubConfig::default(),
             server: ServerConfig {
                 port: 8080,
                 data_dir: "./data".to_string(),

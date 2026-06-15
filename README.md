@@ -6,7 +6,9 @@ Built with [Axum](https://github.com/tokio-rs/axum) and Tokio. All data is store
 
 ## Features
 
-- Instance and news management
+- Instance and news management with per-instance changelogs and pinned news
+- Launcher auto-update hosting, serves `latest.json` and binaries for the Tauri updater
+- GitHub Actions build trigger from the admin panel (optional)
 - Per-instance manifest management (mods, resource packs, shaders, extra files)
 - Streaming file upload with SHA-1 checksums and configurable size limit
 - JWT authentication with Argon2 password hashing
@@ -57,6 +59,12 @@ username = "admin"
 password_hash = ""        # auto-generated on first run
 jwt_secret = ""           # auto-generated on first run
 jwt_expiry_secs = 86400
+
+[github]
+pat = ""                  # Personal Access Token with `workflow` scope
+repo = ""                 # e.g. "yourname/corvus"
+workflow = "release.yml"  # workflow file to dispatch
+branch = "main"           # branch to dispatch on
 ```
 
 Environment variable examples:
@@ -64,9 +72,13 @@ Environment variable examples:
 CORVUS_SERVER__PORT=9000
 CORVUS_SERVER__PUBLIC_URL=https://launcher.example.com
 CORVUS_AUTH__JWT_EXPIRY_SECS=3600
+CORVUS_GITHUB__PAT=ghp_...
+CORVUS_GITHUB__REPO=yourname/corvus
 ```
 
 The `ADMIN_PASSWORD` env var sets the password on first run if `password_hash` is empty.
+
+The `[github]` section is optional. If `pat` or `repo` is empty, the "Trigger Build" button in the admin panel will return an error.
 
 ## Data layout
 
@@ -74,13 +86,22 @@ The `ADMIN_PASSWORD` env var sets the password on first run if `password_hash` i
 data/
 ├── instances.json
 ├── news.json
-└── instances/
-    └── {game_dir}/
-        ├── manifest.json
-        ├── files.json
-        └── files/
-            └── *.jar / *.zip
+├── launcher-release.json
+├── instances/
+│   └── {game_dir}/
+│       ├── manifest.json
+│       ├── files.json
+│       └── files/
+│           └── *.jar / *.zip
+└── launcher-updates/
+    └── {platform}/
+        ├── corvus_{version}_x64-setup.exe
+        └── corvus_{version}_x64-setup.exe.sig
 ```
+
+`launcher-release.json` stores the current version metadata (version, notes, pub_date) and per-platform download URLs and signatures in Tauri updater format. `launcher-updates/{platform}/` stores the binary and signature files served to the Tauri updater.
+
+Valid platform identifiers: `windows-x86_64`, `linux-x86_64`, `darwin-aarch64`, `darwin-x86_64`.
 
 ## API
 
@@ -101,14 +122,16 @@ Login is rate-limited to 10 attempts per IP per 60 seconds.
 
 ### Public (no auth)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check |
-| `GET` | `/instances.json` | Instance list |
-| `GET` | `/news.json` | News list |
-| `GET` | `/{game_dir}/manifest.json` | Instance manifest |
-| `GET` | `/files/{game_dir}/{filename}` | Download a file |
-| `GET` | `/admin` | Admin panel |
+| Method | Path | Description                                                                                                                         |
+|--------|------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `GET` | `/health` | Health check                                                                                                                        |
+| `GET` | `/instances.json` | Instance list (pinned news sorted first)                                                                                            |
+| `GET` | `/news.json` | News list (pinned items sorted first)                                                                                               |
+| `GET` | `/{game_dir}/manifest.json` | Instance manifest                                                                                                                   |
+| `GET` | `/files/{game_dir}/{filename}` | Download a file                                                                                                                     |
+| `GET` | `/updates/latest.json` | Tauri updater endpoint, returns version, notes, pub_date, and per-platform URLs/signatures. Returns 404 if no release is configured |
+| `GET` | `/updates/{platform}/{filename}` | Serve a launcher binary or `.sig` file                                                                                              |
+| `GET` | `/admin` | Admin panel                                                                                                                         |
 
 ### Instances
 
@@ -131,6 +154,8 @@ Login is rate-limited to 10 attempts per IP per 60 seconds.
 | `DELETE` | `/api/admin/news/{id}` | Delete a news item |
 | `PUT` | `/api/admin/news/order` | Reorder news items |
 
+News items have a `pinned` boolean field (default `false`). Pinned items appear first in the public `/news.json` response regardless of order.
+
 ### Manifest & Files
 
 | Method | Path | Description |
@@ -142,6 +167,20 @@ Login is rate-limited to 10 attempts per IP per 60 seconds.
 | `DELETE` | `/api/admin/instances/{id}/files/{filename}` | Delete a file |
 
 Upload accepts `.jar` and `.zip` only. Files are streamed to disk and SHA-1 is computed incrementally. The size limit is set by `max_upload_mb` in the config (default 512 MB).
+
+### Launcher Updates
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/admin/updates` | Get current release metadata |
+| `PUT` | `/api/admin/updates` | Update version, notes, pub_date |
+| `POST` | `/api/admin/updates/{platform}/upload` | Upload binary + signature for a platform (`multipart/form-data` with `binary` and `signature` fields) |
+| `DELETE` | `/api/admin/updates/{platform}` | Remove a platform entry and its files |
+| `POST` | `/api/admin/trigger-build` | Dispatch a GitHub Actions workflow to build all platforms |
+
+The trigger-build endpoint accepts an optional JSON body `{"version": "...", "release_notes": "..."}` which is forwarded to the workflow as inputs. Requires `[github]` config to be set.
+
+Instance objects have a `changelog` field: an array of `{version, date, notes}` entries. It is displayed in the launcher below the PLAY button and is editable in the admin panel's instance editor.
 
 ### Dashboard
 

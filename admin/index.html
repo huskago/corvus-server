@@ -853,6 +853,23 @@
             </div>
             <div class="section-title">Platform Binaries</div>
             <div id="up-platforms"></div>
+
+            <div class="section-title" style="margin-top:24px">Trigger Build</div>
+            <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:20px 24px">
+                <div style="font-size:13px;color:var(--muted);margin-bottom:14px">
+                    Triggers a GitHub Actions workflow that builds all platform binaries and uploads them here automatically.
+                    Requires <code style="color:var(--accent)">github.pat</code> and <code style="color:var(--accent)">github.repo</code> to be set in <code style="color:var(--accent)">config.toml</code>.
+                </div>
+                <div style="margin-bottom:12px">
+                    <label>Release Notes <span style="color:var(--muted);font-weight:400;text-transform:none">(optional, shown in the launcher)</span></label>
+                    <textarea class="fi" id="up-trigger-notes"
+                              style="min-height:60px;resize:vertical;font-family:inherit"
+                              placeholder="Bug fixes and improvements..."></textarea>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="triggerBuild()" id="up-trigger-btn">
+                    &#128640; Trigger Build on GitHub Actions
+                </button>
+            </div>
         </div>
 
         <div id="page-settings" class="page">
@@ -1708,6 +1725,23 @@
             await loadUpdates();
         } catch (e) {
             toast(e.message, 'error');
+        }
+    }
+
+    async function triggerBuild() {
+        const notes = (document.getElementById('up-trigger-notes').value || '').trim();
+        const btn = document.getElementById('up-trigger-btn');
+        btn.disabled = true;
+        btn.textContent = 'Triggering…';
+        try {
+            await POST('/api/admin/trigger-build', {notes: notes || null});
+            toast('Build triggered on GitHub Actions');
+            document.getElementById('up-trigger-notes').value = '';
+        } catch (e) {
+            toast(e.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '&#128640; Trigger Build on GitHub Actions';
         }
     }
 
