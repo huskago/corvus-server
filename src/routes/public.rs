@@ -37,9 +37,10 @@ pub async fn get_instances(
 }
 
 pub async fn get_news(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
-    let news = storage::read_news(&state.data_dir)
+    let mut news = storage::read_news(&state.data_dir)
         .await
         .map_err(AppError::Storage)?;
+    news.sort_by(|a, b| b.pinned.cmp(&a.pinned));
     Ok(Json(news))
 }
 

@@ -817,6 +817,10 @@
                     <div><label>Image URL</label><input class="fi" id="nf-img" placeholder="https://..."></div>
                     <div><label>Action URL</label><input class="fi" id="nf-url" placeholder="https://..."></div>
                     <div><label>Date</label><input class="fi" id="nf-date" type="datetime-local"></div>
+                    <div style="display:flex;align-items:center;gap:8px;padding-top:18px">
+                        <input type="checkbox" id="nf-pinned" style="accent-color:var(--accent);width:16px;height:16px">
+                        <label style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--text)">Pin to top</label>
+                    </div>
                 </div>
                 <div style="margin-top:14px;display:flex;gap:8px">
                     <button class="btn btn-primary btn-sm" onclick="saveNews()">Save</button>
@@ -1501,7 +1505,7 @@
         <div style="flex:1">
           <div style="font-weight:600">${esc(n.title)}</div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px">
-            ${(n.type || '').toUpperCase()} &middot; ${(n.date || '').substring(0, 10)}
+            ${n.pinned ? '<span style="color:var(--warn);margin-right:4px">&#128204;</span>' : ''}${(n.type || '').toUpperCase()} &middot; ${(n.date || '').substring(0, 10)}
           </div>
           ${n.content ? `<div style="font-size:12px;color:rgba(255,255,255,.5);margin-top:4px;
             white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:600px">${esc(n.content)}</div>` : ''}
@@ -1529,6 +1533,7 @@
     function clearNewsForm() {
         ['nf-id', 'nf-title', 'nf-content', 'nf-img', 'nf-url'].forEach(id => document.getElementById(id).value = '');
         document.getElementById('nf-type').value = 'update';
+        document.getElementById('nf-pinned').checked = false;
         document.getElementById('news-form-title').textContent = 'New Article';
     }
 
@@ -1541,6 +1546,7 @@
         document.getElementById('nf-img').value = n.imageUrl || '';
         document.getElementById('nf-url').value = n.actionUrl || '';
         document.getElementById('nf-date').value = (n.date || '').slice(0, 16);
+        document.getElementById('nf-pinned').checked = !!n.pinned;
         document.getElementById('news-form-title').textContent = 'Edit Article';
         document.getElementById('news-form-wrap').style.display = 'block';
     }
@@ -1560,6 +1566,7 @@
             date: dateVal ? new Date(dateVal).toISOString().slice(0, 19) : new Date().toISOString().slice(0, 19),
             imageUrl: document.getElementById('nf-img').value.trim() || null,
             actionUrl: document.getElementById('nf-url').value.trim() || null,
+            pinned: document.getElementById('nf-pinned').checked,
         };
         try {
             await POST('/api/admin/news', body);
