@@ -43,12 +43,16 @@ async fn main() {
     std::fs::create_dir_all(&data_dir).expect("create data dir");
 
     let port = cfg.server.port;
+    let public_url = cfg.server.public_url.clone();
+    let data_dir_display = data_dir.display().to_string();
     let state = AppState::new(cfg, config_path);
     let app = routes::build_router(state);
 
     let addr = format!("0.0.0.0:{port}");
     tracing::info!("Corvus Server listening on {addr}");
-    tracing::info!("Admin panel: http://{addr}/admin");
+    tracing::info!("Public URL: {public_url}");
+    tracing::info!("Data dir:   {data_dir_display}");
+    tracing::info!("Admin panel: {public_url}/admin");
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
