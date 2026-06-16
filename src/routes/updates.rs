@@ -10,7 +10,7 @@ use serde_json::json;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use reqwest::Client;
-
+use tokio_util::bytes;
 use crate::{error::AppError, models::LauncherPlatformEntry, routes::AuthUser, state::AppState, storage};
 
 fn is_valid_platform(p: &str) -> bool {
@@ -131,6 +131,7 @@ pub async fn upload_platform(
         .map_err(|e| AppError::Storage(e.to_string()))?;
 
     let mut filename = String::new();
+    let mut file_data: Option<bytes::Bytes> = None;
     let mut signature = String::new();
 
     while let Some(field) = multipart
@@ -151,15 +152,7 @@ pub async fn upload_platform(
                     .bytes()
                     .await
                     .map_err(|e| AppError::BadRequest(e.to_string()))?;
-                // clear existing files for this platform before writing
-                if let Ok(mut rd) = tokio::fs::read_dir(&updates_dir).await {
-                    while let Ok(Some(entry)) = rd.next_entry().await {
-                        tokio::fs::remove_file(entry.path()).await.ok();
-                    }
-                }
-                tokio::fs::write(updates_dir.join(&filename), data)
-                    .await
-                    .map_err(|e| AppError::Storage(e.to_string()))?;
+                file_data = Some(data);
             }
             "signature" => {
                 let data = field
@@ -176,11 +169,22 @@ pub async fn upload_platform(
     if filename.is_empty() {
         return Err(AppError::BadRequest("no file uploaded".into()));
     }
+    let data = file_data.ok_or_else(|| AppError::BadRequest("no file data".into()))?;
 
     let public_url = state.config.read().await.server.public_url.clone();
     let url = format!("{public_url}/updates/{platform}/{filename}");
 
     let _guard = state.write_lock.lock().await;
+
+    if let Ok(mut rd) = tokio::fs::read_dir(&updates_dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            tokio::fs::remove_file(entry.path()).await.ok();
+        }
+    }
+    tokio::fs::write(updates_dir.join(&filename), data)
+        .await
+        .map_err(|e| AppError::Storage(e.to_string()))?;
+
     let mut release = storage::read_launcher_release(&state.data_dir)
         .await
         .map_err(AppError::Storage)?;
