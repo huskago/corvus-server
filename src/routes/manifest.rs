@@ -108,9 +108,11 @@ pub async fn upload(
             }
 
             hasher.update(&chunk);
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| AppError::Storage(e.to_string()))?;
+            if let Err(e) = file.write_all(&chunk).await {
+                drop(file);
+                tokio::fs::remove_file(dest).await.ok();
+                return Err(AppError::Storage(e.to_string()));
+            }
         }
 
         file.flush()
@@ -145,7 +147,7 @@ pub async fn delete_file(
     _auth: AuthUser,
     Path((id, filename)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
-    if filename.contains("..") {
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
         return Err(AppError::BadRequest("invalid filename".to_string()));
     }
 
