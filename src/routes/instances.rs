@@ -105,6 +105,12 @@ pub async fn reorder(
         .await
         .map_err(AppError::Storage)?;
 
+    if order.len() != items.len() || !items.iter().all(|i| order.contains(&i.game_dir_name)) {
+        return Err(AppError::BadRequest(
+            "order must contain exactly all existing instance IDs".to_string())
+        );
+    }
+
     let reordered: Vec<InstanceInfo> = order
         .iter()
         .filter_map(|id| items.iter().find(|i| &i.game_dir_name == id).cloned())
