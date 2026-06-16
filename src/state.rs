@@ -57,6 +57,8 @@ impl AppState {
         let mut map = self.login_attempts.lock().unwrap();
         let now = Instant::now();
 
+        map.retain(|_, v| v.window_start.elapsed().as_secs() < WINDOW_SECS * 10);
+
         let entry = map.entry(ip).or_insert_with(|| LoginAttempts {
             count: 0,
             window_start: now,
