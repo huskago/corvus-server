@@ -124,6 +124,11 @@ async fn scan_extra_files(
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .replace('\\', "/");
+                // Skip paths that wouldn't survive validate_extra_path (unsanitizable segments)
+                match validate_extra_path(&rel) {
+                    Ok(safe) if safe == rel => {}
+                    _ => continue,
+                }
                 if !known.contains(&rel) {
                     let size = e
                         .metadata()
@@ -143,6 +148,13 @@ pub async fn scan(
     _auth: AuthUser,
     Path(id): Path<String>,
 ) -> Result<Json<ScanResult>, AppError> {
+    let instances = storage::read_instances(&state.data_dir)
+        .await
+        .map_err(AppError::Storage)?;
+    if !instances.iter().any(|i| i.game_dir_name == id) {
+        return Err(AppError::NotFound(format!("instance '{id}' not found")));
+    }
+
     let manifest = storage::read_manifest(&state.data_dir, &id)
         .await
         .map_err(AppError::Storage)?;
@@ -174,6 +186,9 @@ pub async fn scan(
                 continue;
             }
             let name = e.file_name().to_string_lossy().to_string();
+            if sanitize_segment(&name) != name {
+                continue; // name contains chars that can't be integrated, skip
+            }
             if !known_names.contains(&name) {
                 let size = e
                     .metadata()
@@ -546,6 +561,13 @@ pub async fn integrate(
     Path(id): Path<String>,
     Json(body): Json<IntegrateRequest>,
 ) -> Result<axum::http::StatusCode, AppError> {
+    let instances = storage::read_instances(&state.data_dir)
+        .await
+        .map_err(AppError::Storage)?;
+    if !instances.iter().any(|i| i.game_dir_name == id) {
+        return Err(AppError::NotFound(format!("instance '{id}' not found")));
+    }
+
     let public_url = state
         .config
         .read()
@@ -656,6 +678,13 @@ pub async fn rehash(
     _auth: AuthUser,
     Path(id): Path<String>,
 ) -> Result<Json<RehashResult>, AppError> {
+    let instances = storage::read_instances(&state.data_dir)
+        .await
+        .map_err(AppError::Storage)?;
+    if !instances.iter().any(|i| i.game_dir_name == id) {
+        return Err(AppError::NotFound(format!("instance '{id}' not found")));
+    }
+
     let files_dir = state.files_dir(&id);
     let extra_dir = state.extra_files_dir(&id);
 
