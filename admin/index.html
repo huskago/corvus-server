@@ -1604,6 +1604,7 @@ ${parts.map((p, i) => {
   <input id="files-search" class="fi" placeholder="🔍 Filter..." style="width:160px;padding:5px 10px;font-size:12px"
     oninput="filesSearchQuery=this.value;renderFilesTab()">
   ${selCount > 0 ? `<button class="btn btn-danger btn-sm" onclick="filesDeleteSelected()">Delete ${selCount}</button>` : ''}
+  <button id="files-rehash-btn" class="btn btn-ghost btn-sm" onclick="filesRehash()" style="margin-left:auto">↻ Recalculate SHA1</button>
 </div>
 <div class="files-progress" id="files-progress">
   <div class="files-progress-bar" id="files-progress-bar" style="width:0%"></div>
@@ -1849,6 +1850,20 @@ ${parts.map((p, i) => {
             await loadFilesTab();
         } catch (e) {
             toast(e.message, 'error');
+        }
+    }
+
+    async function filesRehash() {
+        const btn = document.getElementById('files-rehash-btn');
+        if (btn) { btn.disabled = true; btn.textContent = '↻ Calculating…'; }
+        try {
+            const r = await POST('/api/admin/instances/' + currentInstId + '/rehash');
+            toast((r && r.updated != null ? r.updated : '?') + ' file(s) updated');
+            await loadFilesTab();
+        } catch (e) {
+            toast(e.message, 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = '↻ Recalculate SHA1'; }
         }
     }
 
