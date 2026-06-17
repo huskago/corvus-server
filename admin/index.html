@@ -2363,6 +2363,78 @@ ${parts.map((p, i) => {
         }
     }
 
+    function filesShowDeletePopover(btn, type, identifier, displayName) {
+        document.querySelectorAll('.files-delete-popover').forEach(p => p.remove());
+        const popover = document.createElement('div');
+        popover.className = 'files-delete-popover';
+        popover.innerHTML = `
+<div style="margin-bottom:8px;font-weight:600">Supprimer "${esc(displayName)}" ?</div>
+<div style="display:flex;gap:6px">
+  <button class="btn btn-danger btn-sm"
+    onclick="filesConfirmDelete('${type}','${escAttr(identifier)}');this.closest('.files-delete-popover').remove()">Oui</button>
+  <button class="btn btn-ghost btn-sm"
+    onclick="this.closest('.files-delete-popover').remove()">Non</button>
+</div>`;
+        const rect = btn.getBoundingClientRect();
+        popover.style.top = (rect.bottom + 4) + 'px';
+        popover.style.right = (window.innerWidth - rect.right) + 'px';
+        document.body.appendChild(popover);
+        setTimeout(() => {
+            document.addEventListener('click', function close(e) {
+                if (!popover.contains(e.target)) { popover.remove(); document.removeEventListener('click', close); }
+            });
+        }, 10);
+    }
+
+    async function filesConfirmDelete(type, identifier) {
+        try {
+            if (type === 'extra') {
+                await DELETE('/api/admin/instances/' + currentInstId + '/extra-files/' + identifier);
+                if (manifestData.extraFiles) manifestData.extraFiles = manifestData.extraFiles.filter(f => f.path !== identifier);
+                await filesRefreshExtra();
+            } else {
+                // special section — delete the uploaded file and remove from manifest
+                await DELETE('/api/admin/instances/' + currentInstId + '/files/' + encodeURIComponent(identifier));
+                if (manifestData[filesSection]) manifestData[filesSection] = manifestData[filesSection].filter(f => f.name !== identifier);
+                await PUT('/api/admin/instances/' + currentInstId + '/manifest', manifestData);
+                renderFilesTab();
+            }
+            filesSelectedKeys.delete(type + ':' + identifier);
+            toast('Supprimé');
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    }
+
+    async function filesDeleteSelected() {
+        const keys = [...filesSelectedKeys];
+        if (!keys.length) return;
+        const count = keys.length;
+        // For bulk we use native confirm — acceptable UX for multi-delete
+        if (!confirm('Supprimer ' + count + ' fichier(s) ?')) return;
+        for (const key of keys) {
+            const colonIdx = key.indexOf(':');
+            const type = key.slice(0, colonIdx);
+            const identifier = key.slice(colonIdx + 1);
+            try {
+                if (type === 'extra') {
+                    await DELETE('/api/admin/instances/' + currentInstId + '/extra-files/' + identifier);
+                    if (manifestData.extraFiles) manifestData.extraFiles = manifestData.extraFiles.filter(f => f.path !== identifier);
+                } else {
+                    await DELETE('/api/admin/instances/' + currentInstId + '/files/' + encodeURIComponent(identifier));
+                    if (manifestData[filesSection]) manifestData[filesSection] = manifestData[filesSection].filter(f => f.name !== identifier);
+                }
+            } catch (e) {
+                toast('Erreur suppression ' + identifier + ': ' + e.message, 'error');
+            }
+        }
+        if (filesSection !== 'extra') await PUT('/api/admin/instances/' + currentInstId + '/manifest', manifestData);
+        filesSelectedKeys.clear();
+        toast('Supprimé ' + count + ' fichier(s)');
+        if (filesSection === 'extra') await filesRefreshExtra();
+        else renderFilesTab();
+    }
+
     async function handleFilesDrop(event) {
         event.preventDefault();
         document.getElementById('files-right')?.classList.remove('files-drag-over');
