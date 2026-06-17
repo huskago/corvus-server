@@ -1666,6 +1666,98 @@ ${parts.map((p, i) => {
         renderBrowserTab();
     }
 
+    async function browserMkdir() {
+        const name = prompt('Folder name:');
+        if (!name) return;
+        const path = browserExtraPath ? browserExtraPath + '/' + name : name;
+        try {
+            await POST('/api/admin/instances/' + currentInstId + '/extra-files/mkdir', { path });
+            toast('Folder created');
+            await browserFetchTree();
+            renderBrowserTab();
+        } catch (e) {
+            toast('Failed: ' + e.message, 'error');
+        }
+    }
+
+    async function handleBrowserDrop(event) {
+        event.preventDefault();
+        event.currentTarget.classList.remove('drag-over');
+        await handleBrowserUpload(event.dataTransfer.files);
+    }
+
+    async function handleBrowserUpload(fileList) {
+        const files = Array.from(fileList);
+        if (!files.length) return;
+        let successCount = 0;
+
+        for (let i = 0; i < files.length; i++) {
+            const filename = files[i].name;
+            const safeName = filename.replace(/[^a-zA-Z0-9\-_.+]/g, '');
+            if (!safeName) { toast('Invalid filename: ' + filename, 'error'); continue; }
+
+            const relPath = browserExtraPath ? browserExtraPath + '/' + safeName : safeName;
+
+            const nameDup = (manifestData.extraFiles || []).find(f => f.path === relPath);
+            if (nameDup) { toast(filename + ' already exists at ' + relPath, 'error'); continue; }
+
+            const buffer = await files[i].arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-1', buffer);
+            const clientSha1 = Array.from(new Uint8Array(hashBuffer), b => b.toString(16).padStart(2, '0')).join('');
+
+            const sha1Dup = (manifestData.extraFiles || []).find(f => f.sha1 && f.sha1 === clientSha1);
+            if (sha1Dup) { toast(filename + ' is identical to ' + sha1Dup.path, 'error'); continue; }
+
+            const form = new FormData();
+            form.append('sha1', clientSha1);
+            form.append('file', files[i]);
+            const dirParam = browserExtraPath ? '?dir=' + encodeURIComponent(browserExtraPath) : '';
+
+            try {
+                const r = await fetch(
+                    '/api/admin/instances/' + currentInstId + '/extra-files/upload' + dirParam,
+                    { method: 'POST', headers: { 'Authorization': 'Bearer ' + S.token }, body: form }
+                );
+                if (!r.ok) {
+                    const e = await r.json().catch(() => ({}));
+                    throw new Error(e.error || r.statusText);
+                }
+                const uploaded = await r.json();
+                uploaded.forEach(u => {
+                    if (!manifestData.extraFiles) manifestData.extraFiles = [];
+                    manifestData.extraFiles = manifestData.extraFiles.filter(f => f.path !== u.path);
+                    manifestData.extraFiles.push({
+                        path: u.path, downloadURL: u.downloadURL, sha1: u.sha1, size: u.size
+                    });
+                });
+                successCount += uploaded.length;
+            } catch (e) {
+                toast('Upload failed (' + filename + '): ' + e.message, 'error');
+            }
+        }
+
+        if (successCount > 0) {
+            toast('Uploaded ' + successCount + ' file(s)');
+            await browserFetchTree();
+            renderBrowserTab();
+        }
+    }
+
+    async function browserDeleteExtra(filePath, displayName) {
+        if (!confirm('Delete ' + displayName + '?')) return;
+        try {
+            await DELETE('/api/admin/instances/' + currentInstId + '/extra-files/' + filePath);
+            if (manifestData.extraFiles) {
+                manifestData.extraFiles = manifestData.extraFiles.filter(f => f.path !== filePath);
+            }
+            toast('Deleted ' + displayName);
+            await browserFetchTree();
+            renderBrowserTab();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    }
+
     // Files tab
     async function loadFilesTab() {
         const el = document.getElementById('inst-tab-files');
