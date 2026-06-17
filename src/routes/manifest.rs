@@ -64,12 +64,23 @@ pub async fn upload(
     };
 
     let mut uploaded: Vec<UploadedFile> = Vec::new();
+    let mut expected_sha1: Option<String> = None;
 
     while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?
     {
+        if field.file_name().is_none() {
+            if field.name() == Some("sha1") {
+                let val = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                if val.len() == 40 && val.chars().all(|c| c.is_ascii_hexdigit()) {
+                    expected_sha1 = Some(val);
+                }
+            }
+            continue;
+        }
+
         let filename = field.file_name().unwrap_or("unknown").to_string();
         let safe = sanitize(&filename);
 
@@ -122,6 +133,15 @@ pub async fn upload(
 
         let sha1 = hex::encode(hasher.finalize());
         let size = written as u64;
+
+        if let Some(expected) = expected_sha1.take() {
+            if sha1 != expected {
+                tokio::fs::remove_file(&dest).await.ok();
+                return Err(AppError::BadRequest(format!(
+                    "{safe}: integrity check failed (SHA1 mismatch)"
+                )));
+            }
+        }
 
         {
             let _guard = state.write_lock.lock().await;

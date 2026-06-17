@@ -1383,7 +1383,23 @@
         let successCount = 0;
         for (let i = 0; i < files.length; i++) {
             if (bar) bar.style.width = (i / files.length * 100) + '%';
+            const filename = files[i].name;
+            const safeName = filename.replace(/[^a-zA-Z0-9\-_.+]/g, '');
+            const nameDup = manifestData[manifestTab].find(f => f.name === safeName);
+            if (nameDup) {
+                toast(filename + ' already exists in the manifest', 'error');
+                continue;
+            }
+            const buffer = await files[i].arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-1', buffer);
+            const clientSha1 = Array.from(new Uint8Array(hashBuffer), b => b.toString(16).padStart(2, '0')).join('');
+            const sha1Dup = manifestData[manifestTab].find(f => f.sha1 && f.sha1 === clientSha1);
+            if (sha1Dup) {
+                toast(filename + ' is identical to ' + sha1Dup.name + ' already in the manifest', 'error');
+                continue;
+            }
             const form = new FormData();
+            form.append('sha1', clientSha1);
             form.append('file', files[i]);
             try {
                 const r = await fetch('/api/admin/instances/' + currentInstId + '/upload', {
