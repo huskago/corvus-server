@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod dashboard;
+pub mod extra_files;
 pub mod instances;
 pub mod manifest;
 pub mod news;
@@ -46,6 +47,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/news.json", get(public::get_news))
         .route("/{game_dir}/manifest.json", get(public::get_manifest))
         .route("/files/{game_dir}/{filename}", get(public::get_file))
+        .route("/extra/{id}/{*path}", get(extra_files::get_extra_file))
         .route("/updates/latest.json", get(updates::latest_json))
         .route("/updates/{platform}/{filename}", get(updates::get_update_file))
         .route("/admin", get(public::serve_admin))
@@ -77,6 +79,14 @@ pub fn build_router(state: AppState) -> Router {
             delete(manifest::delete_file),
         )
         .route("/api/admin/instances/{id}/files", get(manifest::list_files))
+        .route(
+            "/api/admin/instances/{id}/extra-files/tree",
+            get(extra_files::tree),
+        )
+        .route(
+            "/api/admin/instances/{id}/extra-files/mkdir",
+            post(extra_files::mkdir),
+        )
         .route("/api/admin/dashboard", get(dashboard::get_dashboard))
         .route(
             "/api/admin/updates",
