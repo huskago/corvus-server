@@ -1839,7 +1839,7 @@ ${parts.map((p, i) => {
         const body = {
             files: (filesPhantoms.files || []).map(f => ({
                 name: f.name,
-                section: f.name.endsWith('.zip') ? 'resourcePacks' : 'mods',
+                section: 'mods',
                 status: 'REQUIRED'
             })),
             extraFiles: (filesPhantoms.extraFiles || []).map(f => ({ path: f.path }))
