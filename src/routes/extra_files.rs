@@ -5,11 +5,13 @@ use axum::{
     response::Response,
     Json,
 };
+use sha1::{Digest, Sha1};
+use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
 use crate::{
     error::AppError,
-    models::{ExtraFileEntry, MkdirRequest, TreeResponse},
+    models::{ExtraFile, ExtraFileEntry, FileMeta, MkdirRequest, TreeResponse},
     routes::AuthUser,
     state::AppState,
     storage,
@@ -210,4 +212,231 @@ pub async fn mkdir(
         .map_err(|e| AppError::Storage(e.to_string()))?;
 
     Ok(StatusCode::CREATED)
+}
+
+async fn cleanup_empty_parents(base: &std::path::Path, rel_path: &std::path::Path) {
+    let mut current = match rel_path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => base.join(p),
+        _ => return,
+    };
+
+    loop {
+        if current == base {
+            break;
+        }
+        let mut entries = match tokio::fs::read_dir(&current).await {
+            Ok(e) => e,
+            Err(_) => break,
+        };
+        let has_entries = entries.next_entry().await.ok().flatten().is_some();
+        if has_entries {
+            break;
+        }
+        if tokio::fs::remove_dir(&current).await.is_err() {
+            break;
+        }
+        current = match current.parent() {
+            Some(p) => p.to_path_buf(),
+            None => break,
+        };
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct UploadQuery {
+    #[serde(default)]
+    pub dir: String,
+}
+
+pub async fn upload(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(id): Path<String>,
+    Query(q): Query<UploadQuery>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<Vec<ExtraFile>>, AppError> {
+    let instances = storage::read_instances(&state.data_dir)
+        .await
+        .map_err(AppError::Storage)?;
+    if !instances.iter().any(|i| i.game_dir_name == id) {
+        return Err(AppError::NotFound(format!("instance '{id}' not found")));
+    }
+
+    let safe_dir = validate_extra_path(&q.dir)?;
+    let base = state.extra_files_dir(&id);
+    let target_dir = if safe_dir.is_empty() {
+        base.clone()
+    } else {
+        base.join(&safe_dir)
+    };
+    tokio::fs::create_dir_all(&target_dir)
+        .await
+        .map_err(|e| AppError::Storage(e.to_string()))?;
+
+    let (max_bytes, public_url) = {
+        let cfg = state.config.read().await;
+        (
+            cfg.server.max_upload_mb as usize * 1024 * 1024,
+            cfg.server.public_url.trim_end_matches('/').to_string(),
+        )
+    };
+
+    let mut uploaded: Vec<ExtraFile> = Vec::new();
+    let mut expected_sha1: Option<String> = None;
+
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?
+    {
+        if field.file_name().is_none() {
+            if field.name() == Some("sha1") {
+                let val = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::BadRequest(e.to_string()))?;
+                if val.len() == 40 && val.chars().all(|c| c.is_ascii_hexdigit()) {
+                    expected_sha1 = Some(val);
+                }
+            }
+            continue;
+        }
+
+        let filename = field.file_name().unwrap_or("unknown").to_string();
+        let safe_name = sanitize_segment(&filename);
+        if safe_name.is_empty() {
+            return Err(AppError::BadRequest("invalid filename".into()));
+        }
+        if safe_name.len() > 255 {
+            return Err(AppError::BadRequest(format!(
+                "{safe_name}: filename too long"
+            )));
+        }
+
+        let rel_path = if safe_dir.is_empty() {
+            safe_name.clone()
+        } else {
+            format!("{safe_dir}/{safe_name}")
+        };
+
+        let dest = target_dir.join(&safe_name);
+        let mut file = tokio::fs::File::create(&dest)
+            .await
+            .map_err(|e| AppError::Storage(e.to_string()))?;
+
+        let mut hasher = Sha1::new();
+        let mut written = 0usize;
+
+        loop {
+            let chunk = field
+                .chunk()
+                .await
+                .map_err(|e| AppError::BadRequest(e.to_string()))?;
+            let Some(chunk) = chunk else { break };
+
+            written += chunk.len();
+            if written > max_bytes {
+                drop(file);
+                tokio::fs::remove_file(&dest).await.ok();
+                return Err(AppError::BadRequest(format!(
+                    "{safe_name}: exceeds {} MB limit",
+                    max_bytes / (1024 * 1024)
+                )));
+            }
+
+            hasher.update(&chunk);
+            if let Err(e) = file.write_all(&chunk).await {
+                drop(file);
+                tokio::fs::remove_file(&dest).await.ok();
+                return Err(AppError::Storage(e.to_string()));
+            }
+        }
+
+        file.flush()
+            .await
+            .map_err(|e| AppError::Storage(e.to_string()))?;
+        drop(file);
+
+        let sha1 = hex::encode(hasher.finalize());
+        let size = written as u64;
+
+        if let Some(expected) = expected_sha1.take() {
+            if sha1 != expected {
+                tokio::fs::remove_file(&dest).await.ok();
+                return Err(AppError::BadRequest(format!(
+                    "{safe_name}: integrity check failed (SHA1 mismatch)"
+                )));
+            }
+        }
+
+        let download_url = format!("{public_url}/extra/{id}/{rel_path}");
+
+        {
+            let _guard = state.write_lock.lock().await;
+            storage::upsert_extra_file_meta(
+                &state.data_dir,
+                &id,
+                &rel_path,
+                FileMeta { sha1: sha1.clone(), size },
+            )
+            .await
+            .map_err(AppError::Storage)?;
+
+            let mut manifest = storage::read_manifest(&state.data_dir, &id)
+                .await
+                .map_err(AppError::Storage)?;
+            manifest.extra_files.retain(|f| f.path != rel_path);
+            manifest.extra_files.push(ExtraFile {
+                path: rel_path.clone(),
+                download_url: download_url.clone(),
+                sha1: sha1.clone(),
+                size,
+            });
+            storage::write_manifest(&state.data_dir, &id, &manifest)
+                .await
+                .map_err(AppError::Storage)?;
+        }
+
+        uploaded.push(ExtraFile { path: rel_path, download_url, sha1, size });
+    }
+
+    Ok(Json(uploaded))
+}
+
+pub async fn delete_extra_file(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path((id, file_path)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    let safe_path = validate_extra_path(&file_path)?;
+    if safe_path.is_empty() {
+        return Err(AppError::BadRequest("file path is required".into()));
+    }
+
+    let base = state.extra_files_dir(&id);
+    let abs_path = base.join(&safe_path);
+
+    {
+        let _guard = state.write_lock.lock().await;
+
+        tokio::fs::remove_file(&abs_path)
+            .await
+            .map_err(|_| AppError::NotFound(format!("{safe_path} not found")))?;
+
+        storage::remove_extra_file_meta(&state.data_dir, &id, &safe_path)
+            .await
+            .map_err(AppError::Storage)?;
+
+        let mut manifest = storage::read_manifest(&state.data_dir, &id)
+            .await
+            .map_err(AppError::Storage)?;
+        manifest.extra_files.retain(|f| f.path != safe_path);
+        storage::write_manifest(&state.data_dir, &id, &manifest)
+            .await
+            .map_err(AppError::Storage)?;
+    }
+
+    cleanup_empty_parents(&base, std::path::Path::new(&safe_path)).await;
+
+    Ok(StatusCode::NO_CONTENT)
 }

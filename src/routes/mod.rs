@@ -87,6 +87,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/admin/instances/{id}/extra-files/mkdir",
             post(extra_files::mkdir),
         )
+        .route(
+            "/api/admin/instances/{id}/extra-files/upload",
+            post(extra_files::upload).layer(DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/api/admin/instances/{id}/extra-files/{*path}",
+            delete(extra_files::delete_extra_file),
+        )
         .route("/api/admin/dashboard", get(dashboard::get_dashboard))
         .route(
             "/api/admin/updates",
