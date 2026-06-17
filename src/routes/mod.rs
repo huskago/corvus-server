@@ -99,6 +99,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/admin/instances/{id}/extra-files/{*path}",
             delete(extra_files::delete_extra_file),
         )
+        .route(
+            "/api/admin/instances/{id}/scan",
+            get(extra_files::scan),
+        )
+        .route(
+            "/api/admin/instances/{id}/integrate",
+            post(extra_files::integrate),
+        )
         .route("/api/admin/dashboard", get(dashboard::get_dashboard))
         .route(
             "/api/admin/updates",

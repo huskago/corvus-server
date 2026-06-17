@@ -199,3 +199,48 @@ pub struct LauncherPlatformEntry {
     pub url: String,
     pub signature: String,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanResult {
+    pub files: Vec<PhantomFile>,
+    pub extra_files: Vec<PhantomExtraFile>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhantomFile {
+    pub name: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhantomExtraFile {
+    pub path: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrateRequest {
+    pub files: Vec<IntegrateFileEntry>,
+    pub extra_files: Vec<IntegrateExtraEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrateFileEntry {
+    pub name: String,
+    pub section: String,
+    pub status: ModStatus,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IntegrateExtraEntry {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RehashResult {
+    pub updated: u32,
+}

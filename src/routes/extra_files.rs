@@ -6,12 +6,17 @@ use axum::{
     Json,
 };
 use sha1::{Digest, Sha1};
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
+use std::collections::HashSet;
 
 use crate::{
     error::AppError,
-    models::{ExtraFile, ExtraFileEntry, FileMeta, MkdirRequest, TreeResponse},
+    models::{
+        ExtraFile, ExtraFileEntry, FileMeta, IntegrateRequest, ManifestFile, MkdirRequest,
+        PhantomExtraFile, PhantomFile, ScanResult, TreeResponse,
+    },
     routes::AuthUser,
     state::AppState,
     storage,
@@ -65,6 +70,138 @@ fn sanitize_segment(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
         .collect()
+}
+
+pub(crate) async fn hash_file(path: &std::path::Path) -> Result<(String, u64), AppError> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| AppError::Storage(format!("open {}: {e}", path.display())))?;
+    let size = file
+        .metadata()
+        .await
+        .map_err(|e| AppError::Storage(e.to_string()))?
+        .len();
+    let mut hasher = Sha1::new();
+    let mut buf = vec![0u8; 65536];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .await
+            .map_err(|e| AppError::Storage(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok((hex::encode(hasher.finalize()), size))
+}
+
+async fn scan_extra_files(
+    base: &std::path::Path,
+    known: &HashSet<String>,
+) -> Result<Vec<PhantomExtraFile>, AppError> {
+    let mut result = Vec::new();
+    let mut dirs_to_visit = vec![base.to_path_buf()];
+    while let Some(dir) = dirs_to_visit.pop() {
+        let mut entries = tokio::fs::read_dir(&dir)
+            .await
+            .map_err(|e| AppError::Storage(e.to_string()))?;
+        while let Some(e) = entries
+            .next_entry()
+            .await
+            .map_err(|e| AppError::Storage(e.to_string()))?
+        {
+            let ft = e
+                .file_type()
+                .await
+                .map_err(|e| AppError::Storage(e.to_string()))?;
+            let path = e.path();
+            if ft.is_dir() {
+                dirs_to_visit.push(path);
+            } else {
+                let rel = path
+                    .strip_prefix(base)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if !known.contains(&rel) {
+                    let size = e
+                        .metadata()
+                        .await
+                        .map_err(|e| AppError::Storage(e.to_string()))?
+                        .len();
+                    result.push(PhantomExtraFile { path: rel, size });
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+pub async fn scan(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<ScanResult>, AppError> {
+    let manifest = storage::read_manifest(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+
+    let known_names: HashSet<String> = manifest
+        .mods
+        .iter()
+        .chain(manifest.resource_packs.iter())
+        .chain(manifest.shaders.iter())
+        .map(|f| f.name.clone())
+        .collect();
+
+    let files_dir = state.files_dir(&id);
+    let mut phantom_files: Vec<PhantomFile> = Vec::new();
+    if files_dir.exists() {
+        let mut entries = tokio::fs::read_dir(&files_dir)
+            .await
+            .map_err(|e| AppError::Storage(e.to_string()))?;
+        while let Some(e) = entries
+            .next_entry()
+            .await
+            .map_err(|e| AppError::Storage(e.to_string()))?
+        {
+            let ft = e
+                .file_type()
+                .await
+                .map_err(|e| AppError::Storage(e.to_string()))?;
+            if !ft.is_file() {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().to_string();
+            if !known_names.contains(&name) {
+                let size = e
+                    .metadata()
+                    .await
+                    .map_err(|e| AppError::Storage(e.to_string()))?
+                    .len();
+                phantom_files.push(PhantomFile { name, size });
+            }
+        }
+        phantom_files.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+
+    let extra_index = storage::read_extra_files_index(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+    let known_extra: HashSet<String> = extra_index.keys().cloned().collect();
+
+    let extra_dir = state.extra_files_dir(&id);
+    let mut phantom_extra: Vec<PhantomExtraFile> = Vec::new();
+    if extra_dir.exists() {
+        phantom_extra = scan_extra_files(&extra_dir, &known_extra).await?;
+        phantom_extra.sort_by(|a, b| a.path.cmp(&b.path));
+    }
+
+    Ok(Json(ScanResult {
+        files: phantom_files,
+        extra_files: phantom_extra,
+    }))
 }
 
 pub async fn get_extra_file(
@@ -401,6 +538,100 @@ pub async fn upload(
     }
 
     Ok(Json(uploaded))
+}
+
+pub async fn integrate(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<IntegrateRequest>,
+) -> Result<axum::http::StatusCode, AppError> {
+    let public_url = state
+        .config
+        .read()
+        .await
+        .server
+        .public_url
+        .trim_end_matches('/')
+        .to_string();
+    let files_dir = state.files_dir(&id);
+    let extra_dir = state.extra_files_dir(&id);
+
+    let _guard = state.write_lock.lock().await;
+    let mut manifest = storage::read_manifest(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+
+    for entry in &body.files {
+        if entry.name.contains("..") || entry.name.contains('/') || entry.name.contains('\\') {
+            return Err(AppError::BadRequest(format!("invalid filename: {}", entry.name)));
+        }
+        let abs = files_dir.join(&entry.name);
+        let (sha1, size) = hash_file(&abs).await?;
+        let download_url = format!("{public_url}/files/{id}/{}", entry.name);
+
+        storage::upsert_file_meta(
+            &state.data_dir,
+            &id,
+            &entry.name,
+            FileMeta { sha1: sha1.clone(), size },
+        )
+        .await
+        .map_err(AppError::Storage)?;
+
+        let section = match entry.section.as_str() {
+            "mods" => &mut manifest.mods,
+            "resourcePacks" => &mut manifest.resource_packs,
+            "shaders" => &mut manifest.shaders,
+            _ => {
+                return Err(AppError::BadRequest(format!(
+                    "invalid section: {}",
+                    entry.section
+                )))
+            }
+        };
+        section.retain(|f| f.name != entry.name);
+        section.push(ManifestFile {
+            name: entry.name.clone(),
+            download_url,
+            sha1,
+            size,
+            status: entry.status.clone(),
+        });
+    }
+
+    for extra in &body.extra_files {
+        let safe_path = validate_extra_path(&extra.path)?;
+        if safe_path.is_empty() {
+            return Err(AppError::BadRequest("extra file path is empty".into()));
+        }
+        let abs = extra_dir.join(&safe_path);
+        let (sha1, size) = hash_file(&abs).await?;
+        let download_url = format!("{public_url}/extra/{id}/{safe_path}");
+
+        storage::upsert_extra_file_meta(
+            &state.data_dir,
+            &id,
+            &safe_path,
+            FileMeta { sha1: sha1.clone(), size },
+        )
+        .await
+        .map_err(AppError::Storage)?;
+
+        manifest.extra_files.retain(|f| f.path != safe_path);
+        manifest.extra_files.push(ExtraFile {
+            path: safe_path,
+            download_url,
+            sha1,
+            size,
+        });
+    }
+
+    storage::write_manifest(&state.data_dir, &id, &manifest)
+        .await
+        .map_err(AppError::Storage)?;
+
+    Ok(axum::http::StatusCode::OK)
 }
 
 pub async fn delete_extra_file(
