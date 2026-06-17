@@ -15,7 +15,7 @@ use crate::{
     error::AppError,
     models::{
         ExtraFile, ExtraFileEntry, FileMeta, IntegrateRequest, ManifestFile, MkdirRequest,
-        PhantomExtraFile, PhantomFile, ScanResult, TreeResponse,
+        PhantomExtraFile, PhantomFile, RehashResult, ScanResult, TreeResponse,
     },
     routes::AuthUser,
     state::AppState,
@@ -649,6 +649,73 @@ pub async fn integrate(
         .map_err(AppError::Storage)?;
 
     Ok(axum::http::StatusCode::OK)
+}
+
+pub async fn rehash(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<RehashResult>, AppError> {
+    let files_dir = state.files_dir(&id);
+    let extra_dir = state.extra_files_dir(&id);
+
+    let _guard = state.write_lock.lock().await;
+    let mut manifest = storage::read_manifest(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+    let mut files_index = storage::read_files_index(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+    let mut extra_index = storage::read_extra_files_index(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+    let mut updated = 0u32;
+
+    for section in [
+        &mut manifest.mods,
+        &mut manifest.resource_packs,
+        &mut manifest.shaders,
+    ] {
+        for f in section.iter_mut() {
+            let abs = files_dir.join(&f.name);
+            if !abs.exists() {
+                continue;
+            }
+            let (sha1, size) = hash_file(&abs).await?;
+            if sha1 != f.sha1 || size != f.size {
+                f.sha1 = sha1.clone();
+                f.size = size;
+                files_index.insert(f.name.clone(), FileMeta { sha1, size });
+                updated += 1;
+            }
+        }
+    }
+
+    for f in manifest.extra_files.iter_mut() {
+        let abs = extra_dir.join(&f.path);
+        if !abs.exists() {
+            continue;
+        }
+        let (sha1, size) = hash_file(&abs).await?;
+        if sha1 != f.sha1 || size != f.size {
+            f.sha1 = sha1.clone();
+            f.size = size;
+            extra_index.insert(f.path.clone(), FileMeta { sha1, size });
+            updated += 1;
+        }
+    }
+
+    storage::write_files_index(&state.data_dir, &id, &files_index)
+        .await
+        .map_err(AppError::Storage)?;
+    storage::write_extra_files_index(&state.data_dir, &id, &extra_index)
+        .await
+        .map_err(AppError::Storage)?;
+    storage::write_manifest(&state.data_dir, &id, &manifest)
+        .await
+        .map_err(AppError::Storage)?;
+
+    Ok(Json(RehashResult { updated }))
 }
 
 pub async fn delete_extra_file(

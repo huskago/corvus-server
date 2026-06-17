@@ -107,6 +107,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/admin/instances/{id}/integrate",
             post(extra_files::integrate),
         )
+        .route(
+            "/api/admin/instances/{id}/rehash",
+            post(extra_files::rehash),
+        )
         .route("/api/admin/dashboard", get(dashboard::get_dashboard))
         .route(
             "/api/admin/updates",
