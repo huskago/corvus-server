@@ -1882,41 +1882,257 @@ ${parts.map((p, i) => {
     async function loadFilesTab() {
         const el = document.getElementById('inst-tab-files');
         if (!currentInstId || currentInstId === '__new__') {
-            el.innerHTML = '<p style="color:var(--muted);font-size:13px">Save the instance first.</p>';
+            el.innerHTML = '<p style="color:var(--muted);font-size:13px">Sauvegardez l\'instance d\'abord.</p>';
             return;
         }
         try {
-            const files = await GET('/api/admin/instances/' + currentInstId + '/files') || [];
-            el.innerHTML = `
-      <div class="section-title">Uploaded files</div>
-      ${files.length === 0
-                ? '<p style="color:var(--muted);font-size:13px">No files uploaded yet.</p>'
-                : files.map(f => `
-          <div style="display:grid;grid-template-columns:1fr auto auto auto;align-items:center;
-            gap:8px;padding:9px 12px;background:var(--bg2);border:1px solid var(--border);
-            border-radius:8px;margin-bottom:5px">
-            <div>
-              <div class="mfr-name">${esc(f.name)}</div>
-              <div class="mfr-hash">${fmtSize(f.size)}</div>
-            </div>
-            <div style="font-size:11px;color:var(--muted)">${esc(f.sha1?.substring(0, 8) || '')}</div>
-            <button class="btn btn-ghost btn-icon btn-sm" onclick="copyToClipboard('${esc(f.url)}')">&#8856;</button>
-            <button class="btn btn-danger btn-icon btn-sm" onclick="deleteUploadedFile('${esc(f.name)}')">&#10005;</button>
-          </div>`).join('')}`;
+            [manifestData, filesExtraTree] = await Promise.all([
+                GET('/api/admin/instances/' + currentInstId + '/manifest').then(d => d || { mods: [], resourcePacks: [], shaders: [], extraFiles: [] }),
+                GET('/api/admin/instances/' + currentInstId + '/extra-files/tree').then(d => d || { dirs: [], files: [] }),
+            ]);
         } catch (e) {
-            el.innerHTML = '<p style="color:var(--danger);font-size:13px">Failed to load files.</p>';
+            el.innerHTML = '<p style="color:var(--danger);font-size:13px">Erreur: ' + esc(e.message) + '</p>';
+            return;
         }
+        filesSelectedKeys = new Set();
+        renderFilesTab();
     }
 
-    async function deleteUploadedFile(filename) {
-        if (!confirm(`Delete ${filename}?`)) return;
+    function renderFilesTab() {
+        const el = document.getElementById('inst-tab-files');
+        if (!el) return;
+        el.innerHTML = `
+<div style="display:flex;gap:0;height:calc(100vh - 180px);min-height:400px;
+  border:1px solid var(--border);border-radius:8px;overflow:hidden">
+  <div id="files-left" style="width:190px;min-width:190px;border-right:1px solid var(--border);
+    overflow-y:auto;background:var(--bg2);padding:8px 0;flex-shrink:0">
+    ${renderFilesLeft()}
+  </div>
+  <div id="files-right" style="flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:0"
+    ondragover="event.preventDefault();document.getElementById('files-right').classList.add('files-drag-over')"
+    ondragleave="if(!document.getElementById('files-right').contains(event.relatedTarget))document.getElementById('files-right').classList.remove('files-drag-over')"
+    ondrop="handleFilesDrop(event)">
+    ${renderFilesRight()}
+  </div>
+</div>`;
+        // Restore search input value after DOM rebuild (innerHTML clears it)
+        const searchEl = document.getElementById('files-search');
+        if (searchEl && filesSearchQuery) searchEl.value = filesSearchQuery;
+    }
+
+    function renderFilesLeft() {
+        const inst = instData.find(i => i.gameDirName === currentInstId);
+        const loader = inst ? inst.loader : 'FABRIC';
+        const hasMods = loader !== 'VANILLA';
+
+        const specials = [];
+        if (hasMods) specials.push({ id: 'mods', label: 'Mods', color: '#22c55e', data: manifestData.mods || [] });
+        specials.push({ id: 'resourcePacks', label: 'Resource Packs', color: '#f97316', data: manifestData.resourcePacks || [] });
+        specials.push({ id: 'shaders', label: 'Shaders', color: '#a855f7', data: manifestData.shaders || [] });
+
+        let html = specials.map(s => `
+<div class="files-left-item ${filesSection === s.id ? 'active' : ''}"
+  onclick="filesSelectSection('${s.id}')"
+  ondragover="event.preventDefault();this.classList.add('files-folder-drag-over')"
+  ondragleave="this.classList.remove('files-folder-drag-over')"
+  ondrop="handleFilesDragToSection(event,'${s.id}')">
+  <span style="width:8px;height:8px;border-radius:50%;background:${s.color};flex-shrink:0"></span>
+  <span style="flex:1;font-weight:600">${esc(s.label)}</span>
+  <span style="color:var(--muted);font-size:11px">${s.data.length}</span>
+</div>`).join('');
+
+        html += `<div style="border-top:1px solid var(--border);margin:6px 4px 6px"></div>`;
+
+        const extraActive = filesSection === 'extra';
+        html += `
+<div class="files-left-item ${extraActive && !filesExtraPath ? 'active' : ''}"
+  onclick="filesNavigateExtra('')"
+  ondragover="event.preventDefault();this.classList.add('files-folder-drag-over')"
+  ondragleave="this.classList.remove('files-folder-drag-over')"
+  ondrop="handleFilesDragToSection(event,'extra','')">
+  <span style="font-size:14px">📁</span>
+  <span style="flex:1;font-weight:600">Extra Files</span>
+</div>`;
+
+        if (extraActive) {
+            filesExtraTree.dirs.forEach(d => {
+                const fp = filesExtraPath ? filesExtraPath + '/' + d : d;
+                html += `
+<div class="files-left-item ${filesExtraPath === fp ? 'active' : ''}"
+  onclick="filesNavigateExtra('${escAttr(fp)}')"
+  ondragover="event.preventDefault();this.classList.add('files-folder-drag-over')"
+  ondragleave="this.classList.remove('files-folder-drag-over')"
+  ondrop="handleFilesDragToSection(event,'extra','${escAttr(fp)}')"
+  style="padding-left:24px">
+  <span style="font-size:12px">📁</span>
+  <span style="flex:1;font-size:12px">${esc(d)}</span>
+</div>`;
+            });
+        }
+
+        return html;
+    }
+
+    function renderFilesRight() {
+        const isExtra = filesSection === 'extra';
+        const sectionLabels = { mods: 'Mods', resourcePacks: 'Resource Packs', shaders: 'Shaders' };
+        const sectionColors = { mods: '#22c55e', resourcePacks: '#f97316', shaders: '#a855f7' };
+
+        // Breadcrumb
+        let breadcrumb;
+        if (isExtra) {
+            const parts = ['Extra Files', ...filesExtraPath.split('/').filter(Boolean)];
+            breadcrumb = `<div style="font-size:12px;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+${parts.map((p, i) => {
+    const navPath = parts.slice(1, i + 1).join('/');
+    const isLast = i === parts.length - 1;
+    return `<span onclick="filesNavigateExtra('${escAttr(navPath)}')"
+  style="cursor:pointer;${isLast ? 'color:var(--text);font-weight:600' : 'color:var(--muted)'}">${esc(p)}</span>${!isLast ? '<span style="opacity:.4">/</span>' : ''}`;
+}).join('')}
+</div>`;
+        } else {
+            breadcrumb = `<div style="font-size:13px;font-weight:700;color:${sectionColors[filesSection]};margin-bottom:10px">${sectionLabels[filesSection] || ''}</div>`;
+        }
+
+        // Toolbar
+        const showUrl = !isExtra;
+        const showFolder = isExtra;
+        const selCount = filesSelectedKeys.size;
+        const toolbar = `
+<div id="files-toolbar" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+  <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
+    ⬆ Upload
+    <input type="file" multiple style="display:none" onchange="filesUploadFilePicker(this.files)">
+  </label>
+  <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
+    📁 Upload dossier
+    <input type="file" webkitdirectory style="display:none" onchange="filesUploadFolderPicker(this.files)">
+  </label>
+  ${showUrl ? `<button class="btn btn-ghost btn-sm" onclick="filesToggleUrlForm()">+ URL</button>` : ''}
+  ${showFolder ? `<button class="btn btn-ghost btn-sm" onclick="filesMkdirInline()">+ Dossier</button>` : ''}
+  <input id="files-search" class="fi" placeholder="🔍 Filtrer..." style="width:160px;padding:5px 10px;font-size:12px"
+    oninput="filesSearchQuery=this.value;renderFilesTab()">
+  ${selCount > 0 ? `<button class="btn btn-danger btn-sm" onclick="filesDeleteSelected()">Supprimer ${selCount}</button>` : ''}
+</div>
+<div class="files-progress" id="files-progress">
+  <div class="files-progress-bar" id="files-progress-bar" style="width:0%"></div>
+</div>`;
+
+        // File list
+        let rows = '';
+        const q = filesSearchQuery.toLowerCase();
+
+        if (isExtra) {
+            const filteredDirs = filesExtraTree.dirs.filter(d => !q || d.toLowerCase().includes(q));
+            const filteredFiles = filesExtraTree.files.filter(f => !q || f.name.toLowerCase().includes(q));
+
+            rows += filteredDirs.map(d => {
+                const fp = filesExtraPath ? filesExtraPath + '/' + d : d;
+                return `
+<div class="files-folder-row" onclick="filesNavigateExtra('${escAttr(fp)}')"
+  ondragover="event.preventDefault();this.classList.add('files-folder-drag-over')"
+  ondragleave="this.classList.remove('files-folder-drag-over')"
+  ondrop="handleFilesDragToSection(event,'extra','${escAttr(fp)}')">
+  <span style="font-size:16px">📁</span>
+  <span style="flex:1;font-size:13px">${esc(d)}</span>
+  <span style="font-size:11px;color:var(--muted)">dossier</span>
+</div>`;
+            }).join('');
+
+            rows += filteredFiles.map(f => {
+                const key = 'extra:' + f.path;
+                return `
+<div class="files-row ${filesSelectedKeys.has(key) ? 'files-row-selected' : ''}">
+  <input type="checkbox" ${filesSelectedKeys.has(key) ? 'checked' : ''}
+    onchange="filesToggleKey('${escAttr(key)}')" style="accent-color:var(--accent)">
+  <span style="font-size:14px">📄</span>
+  <span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${esc(f.name)}</span>
+  <span style="font-size:11px;color:var(--muted)">${fmtSize(f.size)}</span>
+  <span></span>
+  <button class="btn btn-ghost btn-icon btn-sm" onclick="copyToClipboard('${escAttr(f.url)}')">⎘</button>
+  <button class="btn btn-danger btn-icon btn-sm" onclick="filesShowDeletePopover(this,'extra','${escAttr(f.path)}','${escAttr(f.name)}')">✕</button>
+</div>`;
+            }).join('');
+
+            if (!rows) rows = `<div style="color:var(--muted);font-size:13px;padding:16px 0">Aucun fichier. Déposez des fichiers ici ou utilisez Upload.</div>`;
+        } else {
+            const items = (manifestData[filesSection] || []).filter(f => !q || f.name.toLowerCase().includes(q));
+            rows = items.length === 0
+                ? `<div style="color:var(--muted);font-size:13px;padding:16px 0">Aucun fichier.</div>`
+                : items.map(f => {
+                    const key = 'special:' + f.name;
+                    const url = esc(f.downloadURL || f.download_url || '');
+                    const statusColor = { REQUIRED: 'var(--accent)', OPTIONAL_ON: '#3b82f6', OPTIONAL_OFF: 'var(--muted)' }[f.status] || 'var(--muted)';
+                    return `
+<div class="files-row ${filesSelectedKeys.has(key) ? 'files-row-selected' : ''}">
+  <input type="checkbox" ${filesSelectedKeys.has(key) ? 'checked' : ''}
+    onchange="filesToggleKey('${escAttr(key)}')" style="accent-color:var(--accent)">
+  <span style="font-size:14px">📄</span>
+  <span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500">${esc(f.name)}</span>
+  <span style="font-size:11px;color:var(--muted)">${fmtSize(f.size)}</span>
+  <select class="fi" style="width:130px;padding:3px 6px;font-size:11px;color:${statusColor}"
+    onchange="filesChangeStatus('${filesSection}','${escAttr(f.name)}',this.value)">
+    <option value="REQUIRED" ${f.status === 'REQUIRED' ? 'selected' : ''}>REQUIRED</option>
+    <option value="OPTIONAL_ON" ${f.status === 'OPTIONAL_ON' ? 'selected' : ''}>OPTIONAL ON</option>
+    <option value="OPTIONAL_OFF" ${f.status === 'OPTIONAL_OFF' ? 'selected' : ''}>OPTIONAL OFF</option>
+  </select>
+  <button class="btn btn-ghost btn-icon btn-sm" onclick="copyToClipboard('${url}')">⎘</button>
+  <button class="btn btn-danger btn-icon btn-sm" onclick="filesShowDeletePopover(this,'special','${escAttr(f.name)}','${escAttr(f.name)}')">✕</button>
+</div>`;
+                }).join('');
+        }
+
+        return breadcrumb + toolbar + `<div id="files-list" style="display:flex;flex-direction:column;gap:4px">${rows}</div>`;
+    }
+
+    function filesSelectSection(section) {
+        filesSection = section;
+        filesSelectedKeys = new Set();
+        filesSearchQuery = '';
+        if (currentInstId) setHash('instances/' + currentInstId + '/files/' + section);
+        renderFilesTab();
+    }
+
+    async function filesNavigateExtra(path) {
+        filesSection = 'extra';
+        filesExtraPath = path;
+        filesSelectedKeys = new Set();
+        filesSearchQuery = '';
+        if (currentInstId) {
+            const hashPath = path ? 'instances/' + currentInstId + '/files/' + path : 'instances/' + currentInstId + '/files';
+            setHash(hashPath);
+        }
         try {
-            await DELETE('/api/admin/instances/' + currentInstId + '/files/' + encodeURIComponent(filename));
-            toast('File deleted');
-            await loadFilesTab();
+            const dir = path ? '?dir=' + encodeURIComponent(path) : '';
+            filesExtraTree = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + dir) || { dirs: [], files: [] };
+        } catch { filesExtraTree = { dirs: [], files: [] }; }
+        renderFilesTab();
+    }
+
+    function filesToggleKey(key) {
+        if (filesSelectedKeys.has(key)) filesSelectedKeys.delete(key);
+        else filesSelectedKeys.add(key);
+        renderFilesTab();
+    }
+
+    async function filesChangeStatus(section, name, status) {
+        try {
+            await api('PATCH', '/api/admin/instances/' + currentInstId + '/manifest/entry',
+                { section, name, status });
+            const entry = (manifestData[section] || []).find(f => f.name === name);
+            if (entry) entry.status = status;
+            renderFilesTab();
         } catch (e) {
             toast(e.message, 'error');
         }
+    }
+
+    async function filesRefreshExtra() {
+        try {
+            const dir = filesExtraPath ? '?dir=' + encodeURIComponent(filesExtraPath) : '';
+            filesExtraTree = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + dir) || { dirs: [], files: [] };
+        } catch { filesExtraTree = { dirs: [], files: [] }; }
+        renderFilesTab();
     }
 
     // News
