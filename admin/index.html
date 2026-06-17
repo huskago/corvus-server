@@ -2368,12 +2368,12 @@ ${parts.map((p, i) => {
         const popover = document.createElement('div');
         popover.className = 'files-delete-popover';
         popover.innerHTML = `
-<div style="margin-bottom:8px;font-weight:600">Supprimer "${esc(displayName)}" ?</div>
+<div style="margin-bottom:8px;font-weight:600">Delete "${esc(displayName)}"?</div>
 <div style="display:flex;gap:6px">
   <button class="btn btn-danger btn-sm"
-    onclick="filesConfirmDelete('${type}','${escAttr(identifier)}');this.closest('.files-delete-popover').remove()">Oui</button>
+    onclick="filesConfirmDelete('${type}','${escAttr(identifier)}');this.closest('.files-delete-popover').remove()">Yes</button>
   <button class="btn btn-ghost btn-sm"
-    onclick="this.closest('.files-delete-popover').remove()">Non</button>
+    onclick="this.closest('.files-delete-popover').remove()">No</button>
 </div>`;
         const rect = btn.getBoundingClientRect();
         popover.style.top = (rect.bottom + 4) + 'px';
@@ -2389,7 +2389,7 @@ ${parts.map((p, i) => {
     async function filesConfirmDelete(type, identifier) {
         try {
             if (type === 'extra') {
-                await DELETE('/api/admin/instances/' + currentInstId + '/extra-files/' + identifier);
+                await DELETE('/api/admin/instances/' + currentInstId + '/extra-files/' + identifier.split('/').map(encodeURIComponent).join('/'));
                 if (manifestData.extraFiles) manifestData.extraFiles = manifestData.extraFiles.filter(f => f.path !== identifier);
                 await filesRefreshExtra();
             } else {
@@ -2400,7 +2400,7 @@ ${parts.map((p, i) => {
                 renderFilesTab();
             }
             filesSelectedKeys.delete(type + ':' + identifier);
-            toast('Supprimé');
+            toast('Deleted');
         } catch (e) {
             toast(e.message, 'error');
         }
@@ -2411,26 +2411,26 @@ ${parts.map((p, i) => {
         if (!keys.length) return;
         const count = keys.length;
         // For bulk we use native confirm — acceptable UX for multi-delete
-        if (!confirm('Supprimer ' + count + ' fichier(s) ?')) return;
+        if (!confirm('Delete ' + count + ' file(s)?')) return;
         for (const key of keys) {
             const colonIdx = key.indexOf(':');
             const type = key.slice(0, colonIdx);
             const identifier = key.slice(colonIdx + 1);
             try {
                 if (type === 'extra') {
-                    await DELETE('/api/admin/instances/' + currentInstId + '/extra-files/' + identifier);
+                    await DELETE('/api/admin/instances/' + currentInstId + '/extra-files/' + identifier.split('/').map(encodeURIComponent).join('/'));
                     if (manifestData.extraFiles) manifestData.extraFiles = manifestData.extraFiles.filter(f => f.path !== identifier);
                 } else {
                     await DELETE('/api/admin/instances/' + currentInstId + '/files/' + encodeURIComponent(identifier));
                     if (manifestData[filesSection]) manifestData[filesSection] = manifestData[filesSection].filter(f => f.name !== identifier);
                 }
             } catch (e) {
-                toast('Erreur suppression ' + identifier + ': ' + e.message, 'error');
+                toast('Error deleting ' + identifier + ': ' + e.message, 'error');
             }
         }
         if (filesSection !== 'extra') await PUT('/api/admin/instances/' + currentInstId + '/manifest', manifestData);
         filesSelectedKeys.clear();
-        toast('Supprimé ' + count + ' fichier(s)');
+        toast('Deleted ' + count + ' file(s)');
         if (filesSection === 'extra') await filesRefreshExtra();
         else renderFilesTab();
     }
