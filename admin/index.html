@@ -2005,14 +2005,14 @@ ${parts.map((p, i) => {
     <input type="file" multiple style="display:none" onchange="filesUploadFilePicker(this.files)">
   </label>
   <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
-    📁 Upload dossier
+    📁 Upload Folder
     <input type="file" webkitdirectory style="display:none" onchange="filesUploadFolderPicker(this.files)">
   </label>
   ${showUrl ? `<button class="btn btn-ghost btn-sm" onclick="filesToggleUrlForm()">+ URL</button>` : ''}
-  ${showFolder ? `<button class="btn btn-ghost btn-sm" onclick="filesMkdirInline()">+ Dossier</button>` : ''}
-  <input id="files-search" class="fi" placeholder="🔍 Filtrer..." style="width:160px;padding:5px 10px;font-size:12px"
+  ${showFolder ? `<button class="btn btn-ghost btn-sm" onclick="filesMkdirInline()">+ Folder</button>` : ''}
+  <input id="files-search" class="fi" placeholder="🔍 Filter..." style="width:160px;padding:5px 10px;font-size:12px"
     oninput="filesSearchQuery=this.value;renderFilesTab()">
-  ${selCount > 0 ? `<button class="btn btn-danger btn-sm" onclick="filesDeleteSelected()">Supprimer ${selCount}</button>` : ''}
+  ${selCount > 0 ? `<button class="btn btn-danger btn-sm" onclick="filesDeleteSelected()">Delete ${selCount}</button>` : ''}
 </div>
 <div class="files-progress" id="files-progress">
   <div class="files-progress-bar" id="files-progress-bar" style="width:0%"></div>
@@ -2035,7 +2035,7 @@ ${parts.map((p, i) => {
   ondrop="handleFilesDragToSection(event,'extra','${escAttr(fp)}')">
   <span style="font-size:16px">📁</span>
   <span style="flex:1;font-size:13px">${esc(d)}</span>
-  <span style="font-size:11px;color:var(--muted)">dossier</span>
+  <span style="font-size:11px;color:var(--muted)">folder</span>
 </div>`;
             }).join('');
 
@@ -2283,6 +2283,83 @@ ${parts.map((p, i) => {
             await filesUploadExtraFiles(items);
         } else {
             await filesUploadSpecialFiles(items.map(i => i.file));
+        }
+    }
+
+    function filesToggleUrlForm() {
+        const existing = document.getElementById('files-url-form');
+        if (existing) { existing.remove(); filesUrlFormActive = false; return; }
+        filesUrlFormActive = true;
+        const toolbar = document.getElementById('files-toolbar');
+        if (!toolbar) return;
+        const form = document.createElement('div');
+        form.id = 'files-url-form';
+        form.style.cssText = `display:flex;gap:8px;align-items:center;padding:8px 0;
+            border-bottom:1px solid var(--border);margin-bottom:8px`;
+        form.innerHTML = `
+<input class="fi" id="files-url-name" placeholder="filename.jar" style="width:200px">
+<input class="fi" id="files-url-href" placeholder="https://..." style="flex:1"
+    onkeydown="if(event.key==='Enter')filesSubmitUrl();if(event.key==='Escape')filesToggleUrlForm()">
+<button class="btn btn-primary btn-sm" onclick="filesSubmitUrl()">Add</button>
+<button class="btn btn-ghost btn-sm" onclick="filesToggleUrlForm()">✕</button>`;
+        toolbar.insertAdjacentElement('afterend', form);
+        document.getElementById('files-url-name').focus();
+    }
+
+    async function filesSubmitUrl() {
+        const name = (document.getElementById('files-url-name')?.value || '').trim();
+        const url = (document.getElementById('files-url-href')?.value || '').trim();
+        if (!name || !url) { toast('Name and URL are required', 'error'); return; }
+        const entry = { name, downloadURL: url, sha1: '', size: 0, status: 'REQUIRED' };
+        if (!manifestData[filesSection]) manifestData[filesSection] = [];
+        manifestData[filesSection].push(entry);
+        try {
+            await PUT('/api/admin/instances/' + currentInstId + '/manifest', manifestData);
+            toast('Added');
+            filesToggleUrlForm();
+            renderFilesTab();
+        } catch (e) {
+            manifestData[filesSection].pop();
+            toast(e.message, 'error');
+        }
+    }
+
+    function filesMkdirInline() {
+        if (filesSection !== 'extra') return;
+        const existing = document.getElementById('files-mkdir-row');
+        if (existing) { existing.remove(); filesMkdirActive = false; return; }
+        filesMkdirActive = true;
+        const list = document.getElementById('files-list');
+        if (!list) return;
+        const row = document.createElement('div');
+        row.id = 'files-mkdir-row';
+        row.style.cssText = `display:flex;align-items:center;gap:8px;padding:7px 10px;
+            background:var(--accdim);border:1px solid var(--accent);border-radius:6px;margin-bottom:4px`;
+        row.innerHTML = `
+<span style="font-size:14px">📁</span>
+<input id="files-mkdir-input" class="fi" placeholder="Folder name"
+    style="flex:1;padding:4px 8px;font-size:13px"
+    onkeydown="if(event.key==='Enter')filesConfirmMkdir();if(event.key==='Escape'){this.closest('#files-mkdir-row').remove();filesMkdirActive=false}">
+<button class="btn btn-primary btn-sm" onclick="filesConfirmMkdir()">Create</button>
+<button class="btn btn-ghost btn-sm" onclick="this.closest('#files-mkdir-row').remove();filesMkdirActive=false">✕</button>`;
+        list.insertBefore(row, list.firstChild);
+        document.getElementById('files-mkdir-input').focus();
+    }
+
+    async function filesConfirmMkdir() {
+        const input = document.getElementById('files-mkdir-input');
+        if (!input) return;
+        const name = input.value.trim();
+        if (!name) return;
+        const path = filesExtraPath ? filesExtraPath + '/' + name : name;
+        try {
+            await POST('/api/admin/instances/' + currentInstId + '/extra-files/mkdir', { path });
+            toast('Folder created');
+            document.getElementById('files-mkdir-row')?.remove();
+            filesMkdirActive = false;
+            await filesRefreshExtra();
+        } catch (e) {
+            toast(e.message, 'error');
         }
     }
 
