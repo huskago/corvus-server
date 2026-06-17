@@ -730,6 +730,7 @@
                         <button class="inst-tab" data-tab="manifest" onclick="switchInstTab('manifest')">Manifest
                         </button>
                         <button class="inst-tab" data-tab="files" onclick="switchInstTab('files')">Files</button>
+                        <button class="inst-tab" data-tab="browser" onclick="switchInstTab('browser')">Browser</button>
                     </div>
                     <div id="inst-tab-general" class="inst-tab-content">
                         <div style="display:flex;align-items:center;gap:16px;margin-bottom:24px">
@@ -784,6 +785,7 @@
                     <div id="inst-tab-changelog" class="inst-tab-content" style="display:none"></div>
                     <div id="inst-tab-manifest" class="inst-tab-content" style="display:none"></div>
                     <div id="inst-tab-files" class="inst-tab-content" style="display:none"></div>
+                    <div id="inst-tab-browser" class="inst-tab-content" style="display:none"></div>
                 </div>
             </div>
         </div>
@@ -1118,6 +1120,7 @@
         if (tab === 'manifest') loadManifestTab();
         if (tab === 'files') loadFilesTab();
         if (tab === 'changelog') renderChangelogTab();
+        if (tab === 'browser') loadBrowserTab();
     }
 
     // Changelog
@@ -1479,6 +1482,188 @@
 
     function copyToClipboard(text) {
         navigator.clipboard.writeText(text).then(() => toast('Copied!'));
+    }
+
+    let browserSection = 'extra';
+    let browserExtraPath = '';
+    let browserExtraTree = { dirs: [], files: [] };
+
+    async function loadBrowserTab() {
+        const el = document.getElementById('inst-tab-browser');
+        if (!currentInstId || currentInstId === '__new__') {
+            el.innerHTML = '<p style="color:var(--muted);font-size:13px">Save the instance first.</p>';
+            return;
+        }
+        browserSection = 'extra';
+        browserExtraPath = '';
+        await browserFetchTree();
+        renderBrowserTab();
+    }
+
+    async function browserFetchTree() {
+        try {
+            const dir = browserExtraPath ? '?dir=' + encodeURIComponent(browserExtraPath) : '';
+            browserExtraTree = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + dir) || { dirs: [], files: [] };
+        } catch (e) {
+            browserExtraTree = { dirs: [], files: [] };
+        }
+    }
+
+    function renderBrowserTab() {
+        const el = document.getElementById('inst-tab-browser');
+        if (!el) return;
+        el.innerHTML = `
+<div style="display:flex;gap:0;height:500px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+  <div style="width:190px;border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;background:var(--bg2);padding:8px 0">
+    ${renderBrowserLeft()}
+  </div>
+  <div style="flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px">
+    ${renderBrowserRight()}
+  </div>
+</div>`;
+    }
+
+    function renderBrowserLeft() {
+        const sections = [
+            { id: 'mods', label: 'Mods', count: (manifestData.mods || []).length },
+            { id: 'resourcePacks', label: 'Resource Packs', count: (manifestData.resourcePacks || []).length },
+            { id: 'shaders', label: 'Shaders', count: (manifestData.shaders || []).length },
+        ];
+
+        let html = sections.map(s => `
+<div onclick="browserSelectSection('${s.id}')"
+  style="padding:7px 14px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;
+  align-items:center;${browserSection === s.id
+    ? 'background:var(--accent);color:#fff;'
+    : 'color:var(--text);'}">
+  <span>${esc(s.label)}</span>
+  <span style="font-size:11px;opacity:.7">${s.count}</span>
+</div>`).join('');
+
+        const isExtra = browserSection === 'extra';
+        html += `
+<div style="border-top:1px solid var(--border);margin-top:4px"></div>
+<div onclick="browserNavigateExtra('')"
+  style="padding:7px 14px;cursor:pointer;font-size:13px;font-weight:600;
+  ${isExtra && !browserExtraPath ? 'background:var(--accent);color:#fff;' : 'color:var(--text);'}">
+  Extra Files
+</div>`;
+
+        if (isExtra) {
+            html += browserExtraTree.dirs.map(d => {
+                const fullPath = browserExtraPath ? browserExtraPath + '/' + d : d;
+                return `
+<div onclick="browserNavigateExtra('${esc(fullPath)}')"
+  style="padding:5px 14px 5px 28px;cursor:pointer;font-size:12px;color:var(--muted)">
+  &#9654; ${esc(d)}
+</div>`;
+            }).join('');
+        }
+        return html;
+    }
+
+    function renderBrowserRight() {
+        const isExtra = browserSection === 'extra';
+
+        let breadcrumb;
+        if (isExtra) {
+            const parts = ['Extra Files', ...browserExtraPath.split('/').filter(Boolean)];
+            breadcrumb = `<div style="font-size:12px;color:var(--muted);margin-bottom:2px">
+${parts.map((p, i) => {
+    const navPath = parts.slice(1, i + 1).join('/');
+    const isLast = i === parts.length - 1;
+    return `<span onclick="browserNavigateExtra('${esc(navPath)}')"
+  style="cursor:pointer;${isLast ? 'color:var(--text);font-weight:600' : ''}">${esc(p)}</span>`;
+}).join(' <span style="opacity:.4">/</span> ')}
+</div>`;
+        } else {
+            const labels = { mods: 'Mods', resourcePacks: 'Resource Packs', shaders: 'Shaders' };
+            breadcrumb = `<div style="font-size:12px;color:var(--text);font-weight:600;margin-bottom:2px">${labels[browserSection] || ''}</div>`;
+        }
+
+        const toolbar = isExtra ? `
+<div style="display:flex;gap:8px;align-items:center">
+  <button class="btn btn-ghost btn-sm" onclick="browserMkdir()">+ New Folder</button>
+  <label class="btn btn-ghost btn-sm" style="cursor:pointer;margin:0">
+    &#8679; Upload
+    <input type="file" multiple style="display:none" onchange="handleBrowserUpload(this.files)">
+  </label>
+</div>` : '';
+
+        let rows = '';
+        if (isExtra) {
+            rows += browserExtraTree.dirs.map(d => {
+                const fp = browserExtraPath ? browserExtraPath + '/' + d : d;
+                return `
+<div onclick="browserNavigateExtra('${esc(fp)}')"
+  style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);
+  border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:13px">
+  <span>&#128193;</span><span style="flex:1">${esc(d)}</span>
+  <span style="font-size:11px;color:var(--muted)">folder</span>
+</div>`;
+            }).join('');
+
+            rows += browserExtraTree.files.map(f => `
+<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);
+  border:1px solid var(--border);border-radius:6px;font-size:13px">
+  <span>&#128196;</span>
+  <span style="flex:1">${esc(f.name)}</span>
+  <span style="font-size:11px;color:var(--muted)">${fmtSize(f.size)}</span>
+  <span style="font-size:10px;background:#3b82f6;color:#fff;padding:1px 6px;border-radius:3px;flex-shrink:0">EXTRA</span>
+  <button class="btn btn-ghost btn-icon btn-sm" onclick="copyToClipboard('${esc(f.url)}')">&#8856;</button>
+  <button class="btn btn-danger btn-icon btn-sm" onclick="browserDeleteExtra('${esc(f.path)}','${esc(f.name)}')">&#10005;</button>
+</div>`).join('');
+
+            if (!rows) {
+                rows = '<div style="color:var(--muted);font-size:13px">No files yet. Upload or drop files below.</div>';
+            }
+        } else {
+            const items = manifestData[browserSection] || [];
+            const badgeStyle = {
+                mods: 'background:#22c55e',
+                resourcePacks: 'background:#f97316',
+                shaders: 'background:#a855f7',
+            };
+            const badgeLabel = { mods: 'MOD', resourcePacks: 'RESPPACK', shaders: 'SHADER' };
+
+            rows = items.length === 0
+                ? '<div style="color:var(--muted);font-size:13px">No files.</div>'
+                : items.map(f => `
+<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg2);
+  border:1px solid var(--border);border-radius:6px;font-size:13px">
+  <span>&#128230;</span>
+  <span style="flex:1">${esc(f.name)}</span>
+  <span style="font-size:11px;color:var(--muted)">${fmtSize(f.size)}</span>
+  <span style="font-size:10px;${badgeStyle[browserSection]};color:#fff;padding:1px 6px;border-radius:3px;flex-shrink:0">${badgeLabel[browserSection]}</span>
+</div>`).join('');
+        }
+
+        const dropZone = isExtra ? `
+<div class="drop-zone" style="margin-top:auto;flex-shrink:0"
+  ondragover="event.preventDefault();this.classList.add('drag-over')"
+  ondragleave="this.classList.remove('drag-over')"
+  ondrop="handleBrowserDrop(event)">
+  <div style="font-size:24px;margin-bottom:4px">&#128230;</div>
+  <div style="font-size:13px">Drop files here to upload into current folder</div>
+</div>` : '';
+
+        return breadcrumb + toolbar + `<div style="display:flex;flex-direction:column;gap:6px;flex:1">` + rows + `</div>` + dropZone;
+    }
+
+    async function browserSelectSection(section) {
+        browserSection = section;
+        if (section === 'extra') {
+            browserExtraPath = '';
+            await browserFetchTree();
+        }
+        renderBrowserTab();
+    }
+
+    async function browserNavigateExtra(path) {
+        browserSection = 'extra';
+        browserExtraPath = path;
+        await browserFetchTree();
+        renderBrowserTab();
     }
 
     // Files tab
