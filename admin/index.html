@@ -633,6 +633,67 @@
             border-radius: 2px;
             transition: width .3s
         }
+
+        .files-row {
+            display: grid;
+            grid-template-columns: 20px 20px 1fr auto auto auto auto;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            transition: border-color .1s
+        }
+        .files-row:hover { border-color: var(--border2) }
+        .files-row.files-row-selected { background: var(--accdim); border-color: rgba(46,204,113,.3) }
+        .files-folder-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: border-color .1s
+        }
+        .files-folder-row:hover { border-color: var(--border2) }
+        .files-left-item {
+            padding: 6px 10px;
+            border-radius: 6px;
+            margin: 1px 4px;
+            cursor: pointer;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background .1s
+        }
+        .files-left-item:hover { background: rgba(255,255,255,.05) }
+        .files-left-item.active { background: var(--accdim); color: var(--accent) }
+        .files-drag-over { outline: 2px dashed var(--accent) !important; background: var(--accdim) !important }
+        .files-folder-drag-over { background: var(--accdim) !important; border-color: var(--accent) !important }
+        .files-progress {
+            height: 3px;
+            background: var(--bg3);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 10px;
+            display: none
+        }
+        .files-progress-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width .2s }
+        .files-delete-popover {
+            position: fixed;
+            z-index: 200;
+            background: var(--bg3);
+            border: 1px solid var(--border2);
+            border-radius: 8px;
+            padding: 10px 14px;
+            box-shadow: 0 4px 20px rgba(0,0,0,.5);
+            font-size: 12px;
+            white-space: nowrap
+        }
     </style>
 </head>
 <body>
@@ -723,14 +784,10 @@
                 <div id="inst-editor" style="display:none">
                     <div id="inst-tabs" style="display:flex;gap:2px;margin-bottom:20px;
             border-bottom:1px solid var(--border);padding-bottom:0">
-                        <button class="inst-tab active" data-tab="general" onclick="switchInstTab('general')">General
-                        </button>
-                        <button class="inst-tab" data-tab="changelog" onclick="switchInstTab('changelog')">Changelog
-                        </button>
-                        <button class="inst-tab" data-tab="manifest" onclick="switchInstTab('manifest')">Manifest
-                        </button>
+                        <button class="inst-tab active" data-tab="general" onclick="switchInstTab('general')">General</button>
+                        <button class="inst-tab" data-tab="changelog" onclick="switchInstTab('changelog')">Changelog</button>
                         <button class="inst-tab" data-tab="files" onclick="switchInstTab('files')">Files</button>
-                        <button class="inst-tab" data-tab="browser" onclick="switchInstTab('browser')">Browser</button>
+                        <button class="inst-tab" data-tab="manifest" onclick="switchInstTab('manifest')">Manifest</button>
                     </div>
                     <div id="inst-tab-general" class="inst-tab-content">
                         <div style="display:flex;align-items:center;gap:16px;margin-bottom:24px">
@@ -783,9 +840,8 @@
                         </div>
                     </div>
                     <div id="inst-tab-changelog" class="inst-tab-content" style="display:none"></div>
-                    <div id="inst-tab-manifest" class="inst-tab-content" style="display:none"></div>
                     <div id="inst-tab-files" class="inst-tab-content" style="display:none"></div>
-                    <div id="inst-tab-browser" class="inst-tab-content" style="display:none"></div>
+                    <div id="inst-tab-manifest" class="inst-tab-content" style="display:none"></div>
                 </div>
             </div>
         </div>
@@ -1094,6 +1150,13 @@
     // Instances
     let instData = [];
     let currentInstId = null;
+    let filesSection = 'mods'; // 'mods' | 'resourcePacks' | 'shaders' | 'extra'
+    let filesExtraPath = '';
+    let filesExtraTree = { dirs: [], files: [] };
+    let filesSelectedKeys = new Set();
+    let filesMkdirActive = false;
+    let filesUrlFormActive = false;
+    let filesSearchQuery = '';
 
     async function loadInstances() {
         const page = document.getElementById('page-instances');
@@ -1175,10 +1238,9 @@
         document.querySelectorAll('.inst-tab-content').forEach(c => c.style.display = 'none');
         document.getElementById('inst-tab-' + tab).style.display = 'block';
         if (currentInstId && currentInstId !== '__new__') setHash('instances/' + currentInstId + '/' + tab);
-        if (tab === 'manifest') loadManifestTab();
-        if (tab === 'files') loadFilesTab();
         if (tab === 'changelog') renderChangelogTab();
-        if (tab === 'browser') loadBrowserTab();
+        if (tab === 'files') loadFilesTab();
+        if (tab === 'manifest') loadManifestReadonly();
     }
 
     // Changelog
