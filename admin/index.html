@@ -1157,6 +1157,8 @@
     let filesMkdirActive = false;
     let filesUrlFormActive = false;
     let filesSearchQuery = '';
+    let filesPhantoms = { files: [], extraFiles: [] };
+    let filesPhantomListVisible = false;
 
     async function loadInstances() {
         const page = document.getElementById('page-instances');
@@ -1412,6 +1414,8 @@
             el.innerHTML = '<p style="color:var(--muted);font-size:13px">Save the instance first.</p>';
             return;
         }
+        filesPhantoms = { files: [], extraFiles: [] };
+        filesPhantomListVisible = false;
         try {
             [manifestData, filesExtraTree] = await Promise.all([
                 GET('/api/admin/instances/' + currentInstId + '/manifest').then(d => d || { mods: [], resourcePacks: [], shaders: [], extraFiles: [] }),
@@ -1421,6 +1425,10 @@
             el.innerHTML = '<p style="color:var(--danger);font-size:13px">Error: ' + esc(e.message) + '</p>';
             return;
         }
+        // scan for phantoms, non-blocking, update banner when done
+        GET('/api/admin/instances/' + currentInstId + '/scan')
+            .then(d => { if (d) { filesPhantoms = d; renderFilesTab(); } })
+            .catch(() => {});
         filesSelectedKeys = new Set();
         renderFilesTab();
     }
@@ -1504,6 +1512,57 @@
         const isExtra = filesSection === 'extra';
         const sectionLabels = { mods: 'Mods', resourcePacks: 'Resource Packs', shaders: 'Shaders' };
         const sectionColors = { mods: '#22c55e', resourcePacks: '#f97316', shaders: '#a855f7' };
+
+        const totalPhantoms = (filesPhantoms.files || []).length + (filesPhantoms.extraFiles || []).length;
+        let phantomHtml = '';
+        if (totalPhantoms > 0) {
+            phantomHtml = `
+<div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:8px;
+  padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+  <span style="color:#f59e0b;font-size:13px;font-weight:600">&#9888; ${totalPhantoms} unindexed file(s) on disk</span>
+  <div style="display:flex;gap:6px;margin-left:auto">
+    <button class="btn btn-ghost btn-sm" onclick="filesTogglePhantomList()">${filesPhantomListVisible ? 'Hide' : 'Show'}</button>
+    <button class="btn btn-ghost btn-sm" onclick="filesIntegrateAll()">Integrate all</button>
+  </div>
+</div>`;
+
+            if (filesPhantomListVisible) {
+                phantomHtml += `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden">`;
+
+                (filesPhantoms.files || []).forEach((f, i) => {
+                    phantomHtml += `
+<div class="files-row" style="border-bottom:1px solid var(--border)">
+  <span style="font-size:14px">📄</span>
+  <span style="font-size:13px;flex:1;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</span>
+  <span style="font-size:11px;color:var(--muted)">${fmtSize(f.size)}</span>
+  <select class="fi" id="phantom-sec-${i}" style="width:120px;padding:3px 6px;font-size:11px">
+    <option value="mods">Mods</option>
+    <option value="resourcePacks">Resource Packs</option>
+    <option value="shaders">Shaders</option>
+  </select>
+  <select class="fi" id="phantom-sta-${i}" style="width:110px;padding:3px 6px;font-size:11px">
+    <option value="REQUIRED">REQUIRED</option>
+    <option value="OPTIONAL_ON">OPTIONAL ON</option>
+    <option value="OPTIONAL_OFF">OPTIONAL OFF</option>
+  </select>
+  <button class="btn btn-ghost btn-sm" onclick="filesIntegrateFileAt(${i})">Integrate</button>
+</div>`;
+                });
+
+                (filesPhantoms.extraFiles || []).forEach((f, i) => {
+                    phantomHtml += `
+<div class="files-row" style="border-bottom:1px solid var(--border)">
+  <span style="font-size:14px">📄</span>
+  <span style="font-size:13px;flex:1;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.path)}</span>
+  <span style="font-size:11px;color:var(--muted)">${fmtSize(f.size)}</span>
+  <span style="font-size:11px;color:var(--muted);width:234px;text-align:right">extra file</span>
+  <button class="btn btn-ghost btn-sm" onclick="filesIntegrateExtraAt(${i})">Integrate</button>
+</div>`;
+                });
+
+                phantomHtml += `</div>`;
+            }
+        }
 
         // Breadcrumb
         let breadcrumb;
@@ -1609,7 +1668,7 @@ ${parts.map((p, i) => {
                 }).join('');
         }
 
-        return breadcrumb + toolbar + `<div id="files-list" style="display:flex;flex-direction:column;gap:4px">${rows}</div>`;
+        return phantomHtml + breadcrumb + toolbar + `<div id="files-list" style="display:flex;flex-direction:column;gap:4px">${rows}</div>`;
     }
 
     function filesSelectSection(section) {
@@ -1660,6 +1719,59 @@ ${parts.map((p, i) => {
             filesExtraTree = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + dir) || { dirs: [], files: [] };
         } catch { filesExtraTree = { dirs: [], files: [] }; }
         renderFilesTab();
+    }
+
+    function filesTogglePhantomList() {
+        filesPhantomListVisible = !filesPhantomListVisible;
+        renderFilesTab();
+    }
+
+    async function filesIntegrateFileAt(i) {
+        const f = filesPhantoms.files[i];
+        const section = document.getElementById('phantom-sec-' + i)?.value || 'mods';
+        const status = document.getElementById('phantom-sta-' + i)?.value || 'REQUIRED';
+        try {
+            await POST('/api/admin/instances/' + currentInstId + '/integrate', {
+                files: [{ name: f.name, section, status }],
+                extraFiles: []
+            });
+            toast('Integrated: ' + f.name);
+            await loadFilesTab();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    }
+
+    async function filesIntegrateExtraAt(i) {
+        const f = filesPhantoms.extraFiles[i];
+        try {
+            await POST('/api/admin/instances/' + currentInstId + '/integrate', {
+                files: [],
+                extraFiles: [{ path: f.path }]
+            });
+            toast('Integrated: ' + f.path.split('/').pop());
+            await loadFilesTab();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
+    }
+
+    async function filesIntegrateAll() {
+        const body = {
+            files: (filesPhantoms.files || []).map(f => ({
+                name: f.name,
+                section: f.name.endsWith('.zip') ? 'resourcePacks' : 'mods',
+                status: 'REQUIRED'
+            })),
+            extraFiles: (filesPhantoms.extraFiles || []).map(f => ({ path: f.path }))
+        };
+        try {
+            await POST('/api/admin/instances/' + currentInstId + '/integrate', body);
+            toast((filesPhantoms.files.length + filesPhantoms.extraFiles.length) + ' file(s) integrated');
+            await loadFilesTab();
+        } catch (e) {
+            toast(e.message, 'error');
+        }
     }
 
     async function computeSha1(file) {
@@ -1920,7 +2032,7 @@ ${parts.map((p, i) => {
                 if (manifestData.extraFiles) manifestData.extraFiles = manifestData.extraFiles.filter(f => f.path !== identifier);
                 await filesRefreshExtra();
             } else {
-                // special section — delete the uploaded file and remove from manifest
+                // special section, delete the uploaded file and remove from manifest
                 await DELETE('/api/admin/instances/' + currentInstId + '/files/' + encodeURIComponent(identifier));
                 if (manifestData[filesSection]) manifestData[filesSection] = manifestData[filesSection].filter(f => f.name !== identifier);
                 await PUT('/api/admin/instances/' + currentInstId + '/manifest', manifestData);
@@ -1937,7 +2049,7 @@ ${parts.map((p, i) => {
         const keys = [...filesSelectedKeys];
         if (!keys.length) return;
         const count = keys.length;
-        // For bulk we use native confirm — acceptable UX for multi-delete
+        // For bulk we use native confirm, acceptable UX for multi-delete
         if (!confirm('Delete ' + count + ' file(s)?')) return;
         for (const key of keys) {
             const colonIdx = key.indexOf(':');
