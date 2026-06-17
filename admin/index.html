@@ -1159,6 +1159,8 @@
     let filesSearchQuery = '';
     let filesPhantoms = { files: [], extraFiles: [] };
     let filesPhantomListVisible = false;
+    let filesExtraTreeCache = {}; // dirPath -> { dirs: [], files: [] }
+    let filesExtraTreeExpanded = new Set(); // paths of expanded dirs (not root)
 
     async function loadInstances() {
         const page = document.getElementById('page-instances');
@@ -1416,14 +1418,28 @@
         }
         filesPhantoms = { files: [], extraFiles: [] };
         filesPhantomListVisible = false;
+        filesExtraTreeCache = {};
+        filesExtraTreeExpanded = new Set();
         try {
-            [manifestData, filesExtraTree] = await Promise.all([
+            const [manifest, rootTree] = await Promise.all([
                 GET('/api/admin/instances/' + currentInstId + '/manifest').then(d => d || { mods: [], resourcePacks: [], shaders: [], extraFiles: [] }),
-                GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + (filesExtraPath ? '?dir=' + encodeURIComponent(filesExtraPath) : '')).then(d => d || { dirs: [], files: [] }),
+                GET('/api/admin/instances/' + currentInstId + '/extra-files/tree').then(d => d || { dirs: [], files: [] }),
             ]);
+            manifestData = manifest;
+            filesExtraTreeCache[''] = rootTree;
+            filesExtraTree = filesExtraPath
+                ? (filesExtraTreeCache[filesExtraPath] || { dirs: [], files: [] })
+                : rootTree;
         } catch (e) {
             el.innerHTML = '<p style="color:var(--danger);font-size:13px">Error: ' + esc(e.message) + '</p>';
             return;
+        }
+        if (filesExtraPath && !filesExtraTreeCache[filesExtraPath]) {
+            try {
+                const d = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree?dir=' + encodeURIComponent(filesExtraPath));
+                filesExtraTreeCache[filesExtraPath] = d || { dirs: [], files: [] };
+                filesExtraTree = filesExtraTreeCache[filesExtraPath];
+            } catch { filesExtraTree = { dirs: [], files: [] }; }
         }
         // scan for phantoms, non-blocking, update banner when done
         GET('/api/admin/instances/' + currentInstId + '/scan')
@@ -1490,19 +1506,8 @@
 </div>`;
 
         if (extraActive) {
-            filesExtraTree.dirs.forEach(d => {
-                const fp = filesExtraPath ? filesExtraPath + '/' + d : d;
-                html += `
-<div class="files-left-item ${filesExtraPath === fp ? 'active' : ''}"
-  onclick="filesNavigateExtra('${escAttr(fp)}')"
-  ondragover="event.preventDefault();this.classList.add('files-folder-drag-over')"
-  ondragleave="this.classList.remove('files-folder-drag-over')"
-  ondrop="handleFilesDragToSection(event,'extra','${escAttr(fp)}')"
-  style="padding-left:24px">
-  <span style="font-size:12px">📁</span>
-  <span style="flex:1;font-size:12px">${esc(d)}</span>
-</div>`;
-            });
+            const rootData = filesExtraTreeCache[''] || { dirs: [], files: [] };
+            html += renderFilesTreeChildren('', rootData.dirs, 0);
         }
 
         return html;
@@ -1685,13 +1690,35 @@ ${parts.map((p, i) => {
         filesSelectedKeys = new Set();
         filesSearchQuery = '';
         if (currentInstId) {
-            const hashPath = path ? 'instances/' + currentInstId + '/files/' + path : 'instances/' + currentInstId + '/files';
+            const hashPath = path
+                ? 'instances/' + currentInstId + '/files/' + path
+                : 'instances/' + currentInstId + '/files';
             setHash(hashPath);
         }
-        try {
-            const dir = path ? '?dir=' + encodeURIComponent(path) : '';
-            filesExtraTree = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + dir) || { dirs: [], files: [] };
-        } catch { filesExtraTree = { dirs: [], files: [] }; }
+        if (!filesExtraTreeCache[path]) {
+            const param = path ? '?dir=' + encodeURIComponent(path) : '';
+            try {
+                filesExtraTreeCache[path] = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + param) || { dirs: [], files: [] };
+            } catch {
+                filesExtraTreeCache[path] = { dirs: [], files: [] };
+            }
+        }
+        filesExtraTree = filesExtraTreeCache[path] || { dirs: [], files: [] };
+
+        // Auto-expand all ancestor dirs
+        const parts = path.split('/').filter(Boolean);
+        let accumulated = '';
+        for (const part of parts) {
+            accumulated = accumulated ? accumulated + '/' + part : part;
+            filesExtraTreeExpanded.add(accumulated);
+            if (!filesExtraTreeCache[accumulated]) {
+                const param = '?dir=' + encodeURIComponent(accumulated);
+                GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + param)
+                    .then(d => { filesExtraTreeCache[accumulated] = d || { dirs: [], files: [] }; })
+                    .catch(() => { filesExtraTreeCache[accumulated] = { dirs: [], files: [] }; });
+            }
+        }
+
         renderFilesTab();
     }
 
@@ -1714,16 +1741,67 @@ ${parts.map((p, i) => {
     }
 
     async function filesRefreshExtra() {
+        const path = filesExtraPath;
+        const param = path ? '?dir=' + encodeURIComponent(path) : '';
         try {
-            const dir = filesExtraPath ? '?dir=' + encodeURIComponent(filesExtraPath) : '';
-            filesExtraTree = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + dir) || { dirs: [], files: [] };
-        } catch { filesExtraTree = { dirs: [], files: [] }; }
+            const d = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + param);
+            filesExtraTreeCache[path] = d || { dirs: [], files: [] };
+            filesExtraTree = filesExtraTreeCache[path];
+        } catch {
+            filesExtraTree = { dirs: [], files: [] };
+        }
         renderFilesTab();
     }
 
     function filesTogglePhantomList() {
         filesPhantomListVisible = !filesPhantomListVisible;
         renderFilesTab();
+    }
+
+    async function filesTreeToggle(dir) {
+        if (filesExtraTreeExpanded.has(dir)) {
+            filesExtraTreeExpanded.delete(dir);
+            renderFilesTab();
+        } else {
+            filesExtraTreeExpanded.add(dir);
+            if (!filesExtraTreeCache[dir]) {
+                try {
+                    const d = await GET('/api/admin/instances/' + currentInstId + '/extra-files/tree?dir=' + encodeURIComponent(dir));
+                    filesExtraTreeCache[dir] = d || { dirs: [], files: [] };
+                } catch {
+                    filesExtraTreeCache[dir] = { dirs: [], files: [] };
+                }
+            }
+            renderFilesTab();
+        }
+    }
+
+    function renderFilesTreeChildren(parentPath, dirs, depth) {
+        return dirs.map(d => {
+            const childPath = parentPath ? parentPath + '/' + d : d;
+            const expanded = filesExtraTreeExpanded.has(childPath);
+            const active = filesExtraPath === childPath;
+            const childData = filesExtraTreeCache[childPath];
+
+            let html = `
+<div class="files-left-item ${active ? 'active' : ''}"
+  style="padding-left:${8 + depth * 14}px;gap:4px;user-select:none"
+  onclick="filesNavigateExtra('${escAttr(childPath)}')"
+  ondragover="event.preventDefault();this.classList.add('files-folder-drag-over')"
+  ondragleave="this.classList.remove('files-folder-drag-over')"
+  ondrop="handleFilesDragToSection(event,'extra','${escAttr(childPath)}')">
+  <span style="font-size:10px;width:12px;flex-shrink:0;text-align:center;cursor:pointer;opacity:.7"
+    onclick="event.stopPropagation();filesTreeToggle('${escAttr(childPath)}')">${expanded ? '▼' : '▶'}</span>
+  <span style="font-size:12px">📁</span>
+  <span style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d)}</span>
+</div>`;
+
+            if (expanded && childData) {
+                html += renderFilesTreeChildren(childPath, childData.dirs, depth + 1);
+            }
+
+            return html;
+        }).join('');
     }
 
     async function filesIntegrateFileAt(i) {
