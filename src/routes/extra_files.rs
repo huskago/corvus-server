@@ -557,27 +557,45 @@ pub async fn integrate(
     let files_dir = state.files_dir(&id);
     let extra_dir = state.extra_files_dir(&id);
 
-    let _guard = state.write_lock.lock().await;
-    let mut manifest = storage::read_manifest(&state.data_dir, &id)
-        .await
-        .map_err(AppError::Storage)?;
-
+    let mut file_hashes: Vec<(String, u64)> = Vec::new();
     for entry in &body.files {
         if entry.name.contains("..") || entry.name.contains('/') || entry.name.contains('\\') {
             return Err(AppError::BadRequest(format!("invalid filename: {}", entry.name)));
         }
+        let sanitized = sanitize_segment(&entry.name);
+        if sanitized != entry.name || sanitized.is_empty() {
+            return Err(AppError::BadRequest(format!("invalid filename: {}", entry.name)));
+        }
         let abs = files_dir.join(&entry.name);
         let (sha1, size) = hash_file(&abs).await?;
-        let download_url = format!("{public_url}/files/{id}/{}", entry.name);
+        file_hashes.push((sha1, size));
+    }
 
-        storage::upsert_file_meta(
-            &state.data_dir,
-            &id,
-            &entry.name,
-            FileMeta { sha1: sha1.clone(), size },
-        )
+    let mut extra_hashes: Vec<(String, String, u64)> = Vec::new();
+    for extra in &body.extra_files {
+        let safe_path = validate_extra_path(&extra.path)?;
+        if safe_path.is_empty() {
+            return Err(AppError::BadRequest("extra file path is empty".into()));
+        }
+        let abs = extra_dir.join(&safe_path);
+        let (sha1, size) = hash_file(&abs).await?;
+        extra_hashes.push((safe_path, sha1, size));
+    }
+
+    let _guard = state.write_lock.lock().await;
+
+    let mut manifest = storage::read_manifest(&state.data_dir, &id)
         .await
         .map_err(AppError::Storage)?;
+
+    let mut files_index = storage::read_files_index(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+
+    for (entry, (sha1, size)) in body.files.iter().zip(file_hashes.iter()) {
+        let download_url = format!("{public_url}/files/{id}/{}", entry.name);
+
+        files_index.insert(entry.name.clone(), FileMeta { sha1: sha1.clone(), size: *size });
 
         let section = match entry.section.as_str() {
             "mods" => &mut manifest.mods,
@@ -594,38 +612,37 @@ pub async fn integrate(
         section.push(ManifestFile {
             name: entry.name.clone(),
             download_url,
-            sha1,
-            size,
+            sha1: sha1.clone(),
+            size: *size,
             status: entry.status.clone(),
         });
     }
 
-    for extra in &body.extra_files {
-        let safe_path = validate_extra_path(&extra.path)?;
-        if safe_path.is_empty() {
-            return Err(AppError::BadRequest("extra file path is empty".into()));
-        }
-        let abs = extra_dir.join(&safe_path);
-        let (sha1, size) = hash_file(&abs).await?;
-        let download_url = format!("{public_url}/extra/{id}/{safe_path}");
-
-        storage::upsert_extra_file_meta(
-            &state.data_dir,
-            &id,
-            &safe_path,
-            FileMeta { sha1: sha1.clone(), size },
-        )
+    storage::write_files_index(&state.data_dir, &id, &files_index)
         .await
         .map_err(AppError::Storage)?;
 
-        manifest.extra_files.retain(|f| f.path != safe_path);
+    let mut extra_index = storage::read_extra_files_index(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+
+    for (safe_path, sha1, size) in &extra_hashes {
+        let download_url = format!("{public_url}/extra/{id}/{safe_path}");
+
+        extra_index.insert(safe_path.clone(), FileMeta { sha1: sha1.clone(), size: *size });
+
+        manifest.extra_files.retain(|f| f.path != *safe_path);
         manifest.extra_files.push(ExtraFile {
-            path: safe_path,
+            path: safe_path.clone(),
             download_url,
-            sha1,
-            size,
+            sha1: sha1.clone(),
+            size: *size,
         });
     }
+
+    storage::write_extra_files_index(&state.data_dir, &id, &extra_index)
+        .await
+        .map_err(AppError::Storage)?;
 
     storage::write_manifest(&state.data_dir, &id, &manifest)
         .await
