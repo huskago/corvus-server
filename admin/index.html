@@ -1377,43 +1377,50 @@
         const prog = document.getElementById('mf-progress');
         if (prog) {
             prog.style.display = 'block';
-            bar.style.width = '0%';
+            if (bar) bar.style.width = '0%';
         }
-        const form = new FormData();
-        files.forEach(f => form.append('files', f));
-        try {
-            if (bar) bar.style.width = '50%';
-            const r = await fetch('/api/admin/instances/' + currentInstId + '/upload', {
-                method: 'POST', headers: {'Authorization': 'Bearer ' + S.token}, body: form
-            });
-            if (!r.ok) {
-                const e = await r.json().catch(() => ({}));
-                throw new Error(e.error || r.statusText);
-            }
-            const uploaded = await r.json();
-            if (bar) bar.style.width = '100%';
-            uploaded.forEach(u => {
-                manifestData[manifestTab].push({
-                    name: u.name,
-                    downloadURL: u.downloadUrl,
-                    sha1: u.sha1,
-                    size: u.size,
-                    status: 'REQUIRED'
+
+        let successCount = 0;
+        for (let i = 0; i < files.length; i++) {
+            if (bar) bar.style.width = (i / files.length * 100) + '%';
+            const form = new FormData();
+            form.append('file', files[i]);
+            try {
+                const r = await fetch('/api/admin/instances/' + currentInstId + '/upload', {
+                    method: 'POST', headers: {'Authorization': 'Bearer ' + S.token}, body: form
                 });
-            });
-            toast(`Uploaded ${uploaded.length} file(s)`);
+                if (!r.ok) {
+                    const e = await r.json().catch(() => ({}));
+                    throw new Error(e.error || r.statusText);
+                }
+                const uploaded = await r.json();
+                uploaded.forEach(u => {
+                    manifestData[manifestTab].push({
+                        name: u.name,
+                        downloadURL: u.downloadUrl,
+                        sha1: u.sha1,
+                        size: u.size,
+                        status: 'REQUIRED'
+                    });
+                });
+                successCount += uploaded.length;
+            } catch (e) {
+                toast('Upload failed (' + files[i].name + '): ' + e.message, 'error');
+            }
+        }
+
+        if (bar) bar.style.width = '100%';
+        if (successCount > 0) {
+            toast('Uploaded ' + successCount + ' file(s)');
             renderManifestTab();
             switchMTab(manifestTab);
-        } catch (e) {
-            toast('Upload failed: ' + e.message, 'error');
-        } finally {
-            setTimeout(() => {
-                if (prog) {
-                    prog.style.display = 'none';
-                    if (bar) bar.style.width = '0%';
-                }
-            }, 1200);
         }
+        setTimeout(() => {
+            if (prog) {
+                prog.style.display = 'none';
+                if (bar) bar.style.width = '0%';
+            }
+        }, 1200);
     }
 
     async function addExternalUrl() {
