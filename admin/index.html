@@ -1409,16 +1409,16 @@
     async function loadFilesTab() {
         const el = document.getElementById('inst-tab-files');
         if (!currentInstId || currentInstId === '__new__') {
-            el.innerHTML = '<p style="color:var(--muted);font-size:13px">Sauvegardez l\'instance d\'abord.</p>';
+            el.innerHTML = '<p style="color:var(--muted);font-size:13px">Save the instance first.</p>';
             return;
         }
         try {
             [manifestData, filesExtraTree] = await Promise.all([
                 GET('/api/admin/instances/' + currentInstId + '/manifest').then(d => d || { mods: [], resourcePacks: [], shaders: [], extraFiles: [] }),
-                GET('/api/admin/instances/' + currentInstId + '/extra-files/tree').then(d => d || { dirs: [], files: [] }),
+                GET('/api/admin/instances/' + currentInstId + '/extra-files/tree' + (filesExtraPath ? '?dir=' + encodeURIComponent(filesExtraPath) : '')).then(d => d || { dirs: [], files: [] }),
             ]);
         } catch (e) {
-            el.innerHTML = '<p style="color:var(--danger);font-size:13px">Erreur: ' + esc(e.message) + '</p>';
+            el.innerHTML = '<p style="color:var(--danger);font-size:13px">Error: ' + esc(e.message) + '</p>';
             return;
         }
         filesSelectedKeys = new Set();
@@ -1581,14 +1581,14 @@ ${parts.map((p, i) => {
 </div>`;
             }).join('');
 
-            if (!rows) rows = `<div style="color:var(--muted);font-size:13px;padding:16px 0">Aucun fichier. Déposez des fichiers ici ou utilisez Upload.</div>`;
+            if (!rows) rows = `<div style="color:var(--muted);font-size:13px;padding:16px 0">No files. Drop files here or use Upload.</div>`;
         } else {
             const items = (manifestData[filesSection] || []).filter(f => !q || f.name.toLowerCase().includes(q));
             rows = items.length === 0
-                ? `<div style="color:var(--muted);font-size:13px;padding:16px 0">Aucun fichier.</div>`
+                ? `<div style="color:var(--muted);font-size:13px;padding:16px 0">No files.</div>`
                 : items.map(f => {
                     const key = 'special:' + f.name;
-                    const url = esc(f.downloadURL || f.download_url || '');
+                    const url = escAttr(f.downloadURL || f.download_url || '');
                     const statusColor = { REQUIRED: 'var(--accent)', OPTIONAL_ON: '#3b82f6', OPTIONAL_OFF: 'var(--muted)' }[f.status] || 'var(--muted)';
                     return `
 <div class="files-row ${filesSelectedKeys.has(key) ? 'files-row-selected' : ''}">
