@@ -121,3 +121,46 @@ pub async fn remove_file_meta(
     index.remove(name);
     write_files_index(data_dir, game_dir, &index).await
 }
+
+fn extra_files_index_path(data_dir: &Path, game_dir: &str) -> std::path::PathBuf {
+    data_dir
+        .join("instances")
+        .join(game_dir)
+        .join("extra-files-index.json")
+}
+
+pub async fn read_extra_files_index(
+    data_dir: &Path,
+    game_dir: &str,
+) -> Result<std::collections::HashMap<String, FileMeta>, String> {
+    read_json(&extra_files_index_path(data_dir, game_dir)).await
+}
+
+pub async fn write_extra_files_index(
+    data_dir: &Path,
+    game_dir: &str,
+    index: &std::collections::HashMap<String, FileMeta>,
+) -> Result<(), String> {
+    write_json(&extra_files_index_path(data_dir, game_dir), index).await
+}
+
+pub async fn upsert_extra_file_meta(
+    data_dir: &Path,
+    game_dir: &str,
+    path: &str,
+    meta: FileMeta,
+) -> Result<(), String> {
+    let mut index = read_extra_files_index(data_dir, game_dir).await?;
+    index.insert(path.to_string(), meta);
+    write_extra_files_index(data_dir, game_dir, &index).await
+}
+
+pub async fn remove_extra_file_meta(
+    data_dir: &Path,
+    game_dir: &str,
+    path: &str,
+) -> Result<(), String> {
+    let mut index = read_extra_files_index(data_dir, game_dir).await?;
+    index.remove(path);
+    write_extra_files_index(data_dir, game_dir, &index).await
+}

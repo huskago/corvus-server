@@ -156,6 +156,27 @@ pub struct FileListEntry {
     pub url: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct TreeResponse {
+    pub dirs: Vec<String>,
+    pub files: Vec<ExtraFileEntry>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraFileEntry {
+    pub path: String,
+    pub name: String,
+    pub sha1: String,
+    pub size: u64,
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MkdirRequest {
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LauncherRelease {

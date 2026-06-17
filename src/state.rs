@@ -46,6 +46,10 @@ impl AppState {
         self.instance_dir(game_dir_name).join("files")
     }
 
+    pub fn extra_files_dir(&self, game_dir_name: &str) -> PathBuf {
+        self.instance_dir(game_dir_name).join("extra-files")
+    }
+
     pub fn updates_dir(&self, platform: &str) -> PathBuf {
         self.data_dir.join("launcher-updates").join(platform)
     }
