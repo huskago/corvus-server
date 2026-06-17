@@ -2135,6 +2135,208 @@ ${parts.map((p, i) => {
         renderFilesTab();
     }
 
+    async function computeSha1(file) {
+        const buf = await file.arrayBuffer();
+        const hash = await crypto.subtle.digest('SHA-1', buf);
+        return Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function filesProgressShow(done, total) {
+        const prog = document.getElementById('files-progress');
+        const bar = document.getElementById('files-progress-bar');
+        if (!prog || !bar) return;
+        prog.style.display = 'block';
+        bar.style.width = total > 0 ? (done / total * 100) + '%' : '0%';
+    }
+
+    function filesProgressHide() {
+        setTimeout(() => {
+            const prog = document.getElementById('files-progress');
+            if (prog) prog.style.display = 'none';
+        }, 1500);
+    }
+
+    async function filesUploadSpecialFiles(files) {
+        const fileArr = Array.from(files);
+        if (!fileArr.length) return;
+        let done = 0;
+        filesProgressShow(0, fileArr.length);
+
+        for (const file of fileArr) {
+            const safe = file.name.replace(/[^a-zA-Z0-9\-_.+]/g, '');
+            if (!safe.endsWith('.jar') && !safe.endsWith('.zip')) {
+                toast(file.name + ': only .jar and .zip are accepted', 'error');
+                continue;
+            }
+            const section = manifestData[filesSection] || [];
+            if (section.find(f => f.name === safe)) {
+                toast(safe + ' already exists', 'error');
+                continue;
+            }
+            const sha1 = await computeSha1(file);
+            const allFiles = [...(manifestData.mods || []), ...(manifestData.resourcePacks || []), ...(manifestData.shaders || [])];
+            if (allFiles.find(f => f.sha1 && f.sha1 === sha1)) {
+                toast(file.name + ': identical file already present', 'error');
+                continue;
+            }
+            const form = new FormData();
+            form.append('sha1', sha1);
+            form.append('file', file);
+            try {
+                const r = await fetch('/api/admin/instances/' + currentInstId + '/upload', {
+                    method: 'POST', headers: { 'Authorization': 'Bearer ' + S.token }, body: form
+                });
+                if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); }
+                const uploaded = await r.json();
+                uploaded.forEach(u => {
+                    if (!manifestData[filesSection]) manifestData[filesSection] = [];
+                    manifestData[filesSection].push({ name: u.name, downloadURL: u.downloadUrl, sha1: u.sha1, size: u.size, status: 'REQUIRED' });
+                });
+                done++;
+            } catch (e) {
+                toast('Upload failed (' + file.name + '): ' + e.message, 'error');
+            }
+            filesProgressShow(done, fileArr.length);
+        }
+
+        if (done > 0) {
+            try {
+                await PUT('/api/admin/instances/' + currentInstId + '/manifest', manifestData);
+                toast('Uploaded ' + done + ' file(s)');
+            } catch (e) { toast('Error saving manifest: ' + e.message, 'error'); }
+            renderFilesTab();
+        }
+        filesProgressHide();
+    }
+
+    async function filesUploadExtraFiles(fileItems) {
+        if (!fileItems.length) return;
+        let done = 0;
+        filesProgressShow(0, fileItems.length);
+
+        for (const { file, relPath } of fileItems) {
+            const pathParts = relPath.split('/');
+            const filename = pathParts.pop();
+            const safe = filename.replace(/[^a-zA-Z0-9\-_.+]/g, '');
+            if (!safe) { toast('Invalid filename: ' + filename, 'error'); continue; }
+
+            const subDir = pathParts.length > 0
+                ? (filesExtraPath ? filesExtraPath + '/' + pathParts.join('/') : pathParts.join('/'))
+                : filesExtraPath;
+            const relFull = subDir ? subDir + '/' + safe : safe;
+
+            if ((manifestData.extraFiles || []).find(f => f.path === relFull)) {
+                toast(safe + ' already exists', 'error');
+                continue;
+            }
+
+            const sha1 = await computeSha1(file);
+            if ((manifestData.extraFiles || []).find(f => f.sha1 && f.sha1 === sha1)) {
+                toast(file.name + ': identical file already present', 'error');
+                continue;
+            }
+
+            const form = new FormData();
+            form.append('sha1', sha1);
+            form.append('file', file);
+            const dirParam = subDir ? '?dir=' + encodeURIComponent(subDir) : '';
+
+            try {
+                const r = await fetch('/api/admin/instances/' + currentInstId + '/extra-files/upload' + dirParam, {
+                    method: 'POST', headers: { 'Authorization': 'Bearer ' + S.token }, body: form
+                });
+                if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); }
+                const uploaded = await r.json();
+                uploaded.forEach(u => {
+                    if (!manifestData.extraFiles) manifestData.extraFiles = [];
+                    manifestData.extraFiles = manifestData.extraFiles.filter(f => f.path !== u.path);
+                    manifestData.extraFiles.push({ path: u.path, downloadURL: u.downloadURL, sha1: u.sha1, size: u.size });
+                });
+                done++;
+            } catch (e) {
+                toast('Upload failed (' + filename + '): ' + e.message, 'error');
+            }
+            filesProgressShow(done, fileItems.length);
+        }
+
+        if (done > 0) {
+            toast('Uploaded ' + done + ' file(s)');
+            await filesRefreshExtra();
+        }
+        filesProgressHide();
+    }
+
+    async function filesUploadFilePicker(fileList) {
+        if (filesSection === 'extra') {
+            await filesUploadExtraFiles(Array.from(fileList).map(f => ({ file: f, relPath: f.name })));
+        } else {
+            await filesUploadSpecialFiles(fileList);
+        }
+    }
+
+    async function filesUploadFolderPicker(fileList) {
+        const items = Array.from(fileList).map(f => ({
+            file: f,
+            relPath: f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(1).join('/') : f.name
+        }));
+        if (filesSection === 'extra') {
+            await filesUploadExtraFiles(items);
+        } else {
+            await filesUploadSpecialFiles(items.map(i => i.file));
+        }
+    }
+
+    async function handleFilesDrop(event) {
+        event.preventDefault();
+        document.getElementById('files-right')?.classList.remove('files-drag-over');
+        const fileItems = [];
+        const items = Array.from(event.dataTransfer.items || []);
+        for (const item of items) {
+            if (item.kind !== 'file') continue;
+            const entry = item.webkitGetAsEntry?.();
+            if (entry?.isDirectory) {
+                await collectFsEntries(entry, fileItems, '');
+            } else {
+                const f = item.getAsFile();
+                if (f) fileItems.push({ file: f, relPath: f.name });
+            }
+        }
+        if (filesSection === 'extra') await filesUploadExtraFiles(fileItems);
+        else await filesUploadSpecialFiles(fileItems.map(i => i.file));
+    }
+
+    async function handleFilesDragToSection(event, section, path) {
+        event.preventDefault();
+        event.stopPropagation();
+        const el = event.currentTarget;
+        el.classList.remove('files-folder-drag-over');
+        const prevSection = filesSection;
+        const prevPath = filesExtraPath;
+        filesSection = section;
+        filesExtraPath = path || '';
+        const fileItems = [];
+        for (const item of Array.from(event.dataTransfer.items || [])) {
+            if (item.kind !== 'file') continue;
+            const f = item.getAsFile();
+            if (f) fileItems.push({ file: f, relPath: f.name });
+        }
+        if (section === 'extra') await filesUploadExtraFiles(fileItems);
+        else await filesUploadSpecialFiles(fileItems.map(i => i.file));
+        filesSection = prevSection;
+        filesExtraPath = prevPath;
+    }
+
+    async function collectFsEntries(dirEntry, result, prefix) {
+        await new Promise(res => dirEntry.createReader().readEntries(async entries => {
+            for (const e of entries) {
+                const rel = prefix ? prefix + '/' + e.name : e.name;
+                if (e.isDirectory) await collectFsEntries(e, result, rel);
+                else await new Promise(r2 => e.file(f => { result.push({ file: f, relPath: rel }); r2(); }));
+            }
+            res();
+        }));
+    }
+
     // News
     const NEWS_COLORS = {update: '#2ecc71', event: '#3b82f6', maintenance: '#e74c3c', info: '#f59e0b'};
     let newsData = [];
