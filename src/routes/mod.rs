@@ -39,7 +39,7 @@ impl FromRequestParts<AppState> for AuthUser {
 }
 
 pub fn build_router(state: AppState) -> Router {
-    use axum::routing::{delete, get, post, put};
+    use axum::routing::{delete, get, patch, post, put};
 
     Router::new()
         .route("/health", get(public::health))
@@ -69,6 +69,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/admin/instances/{id}/manifest",
             get(manifest::get_manifest).put(manifest::put_manifest),
+        )
+        .route(
+            "/api/admin/instances/{id}/manifest/entry",
+            patch(manifest::patch_manifest_entry),
         )
         .route(
             "/api/admin/instances/{id}/upload",

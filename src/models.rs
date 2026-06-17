@@ -177,6 +177,14 @@ pub struct MkdirRequest {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchManifestEntryRequest {
+    pub section: String,
+    pub name: String,
+    pub status: ModStatus,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LauncherRelease {

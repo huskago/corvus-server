@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::{
     error::AppError,
-    models::{FileListEntry, FileMeta, InstanceManifest, UploadedFile},
+    models::{FileListEntry, FileMeta, InstanceManifest, PatchManifestEntryRequest, UploadedFile},
     routes::AuthUser,
     state::AppState,
     storage,
@@ -244,4 +244,36 @@ fn sanitize(name: &str) -> String {
     name.chars()
         .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
         .collect()
+}
+
+pub async fn patch_manifest_entry(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<PatchManifestEntryRequest>,
+) -> Result<StatusCode, AppError> {
+    let _guard = state.write_lock.lock().await;
+    let mut manifest = storage::read_manifest(&state.data_dir, &id)
+        .await
+        .map_err(AppError::Storage)?;
+
+    let entries = match body.section.as_str() {
+        "mods" => &mut manifest.mods,
+        "resourcePacks" => &mut manifest.resource_packs,
+        "shaders" => &mut manifest.shaders,
+        _ => return Err(AppError::BadRequest(format!("invalid section: {}", body.section))),
+    };
+
+    let entry = entries
+        .iter_mut()
+        .find(|f| f.name == body.name)
+        .ok_or_else(|| AppError::NotFound(format!("{} not found in {}", body.name, body.section)))?;
+
+    entry.status = body.status;
+
+    storage::write_manifest(&state.data_dir, &id, &manifest)
+        .await
+        .map_err(AppError::Storage)?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
