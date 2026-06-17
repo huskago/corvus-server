@@ -223,6 +223,9 @@ pub async fn get_extra_file(
     State(state): State<AppState>,
     Path((id, file_path)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
+    if id.contains("..") {
+        return Err(AppError::BadRequest("invalid instance id".into()));
+    }
     let safe_path = validate_extra_path(&file_path)?;
     let abs_path = state.extra_files_dir(&id).join(&safe_path);
 
