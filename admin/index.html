@@ -907,6 +907,13 @@
 </div>
 
 <script>
+    let _skipHashPush = false;
+    function setHash(path) {
+        if (_skipHashPush) return;
+        const h = '#' + path;
+        if (location.hash !== h) history.pushState(null, '', h);
+    }
+
     const S = {token: localStorage.getItem('hka_token'), expires: +localStorage.getItem('hka_exp') || 0};
 
     async function api(method, path, body) {
@@ -967,6 +974,50 @@
         document.getElementById('login-screen').classList.remove('hidden');
     }
 
+    async function initFromHash() {
+        const hash = location.hash.slice(1) || 'dashboard';
+        const parts = hash.split('/');
+
+        if (parts[0] === 'instances' && parts[1]) {
+            _skipHashPush = true;
+            document.querySelectorAll('.page').forEach(p => { p.classList.remove('active'); p.style.display = 'none'; });
+            const el = document.getElementById('page-instances');
+            el.classList.add('active');
+            el.style.display = 'flex';
+            document.querySelectorAll('.nav-icon').forEach(b =>
+                b.classList.toggle('active', b.getAttribute('title').toLowerCase() === 'instances'));
+
+            instData = await GET('/api/admin/instances') || [];
+            renderInstList();
+
+            const inst = instData.find(i => i.gameDirName === parts[1]);
+            if (inst) {
+                openInstance(inst);
+                const tab = parts[2] || 'general';
+                if (tab !== 'general') {
+                    if (tab === 'files' && parts[3]) {
+                        const subPath = parts.slice(3).join('/');
+                        if (['mods', 'resourcePacks', 'shaders'].includes(subPath)) {
+                            filesSection = subPath;
+                            filesExtraPath = '';
+                        } else {
+                            filesSection = 'extra';
+                            filesExtraPath = subPath;
+                        }
+                    }
+                    switchInstTab(tab);
+                }
+            }
+            _skipHashPush = false;
+        } else {
+            _skipHashPush = true;
+            nav(parts[0] || 'dashboard');
+            _skipHashPush = false;
+        }
+    }
+
+    window.addEventListener('popstate', initFromHash);
+
     function nav(page) {
         document.querySelectorAll('.page').forEach(p => {
             p.classList.remove('active');
@@ -979,6 +1030,7 @@
         document.querySelectorAll('.nav-icon').forEach(b => {
             if (b.getAttribute('title').toLowerCase() === page) b.classList.add('active');
         });
+        setHash(page);
         loadPage(page);
     }
 
@@ -1071,6 +1123,7 @@
     function openInstance(i) {
         if (typeof i === 'string') i = JSON.parse(i);
         currentInstId = i.gameDirName || '__new__';
+        if (i.gameDirName) setHash('instances/' + i.gameDirName + '/general');
         renderInstList();
         document.getElementById('inst-placeholder').style.display = 'none';
         document.getElementById('inst-editor').style.display = 'block';
@@ -1121,6 +1174,7 @@
         document.querySelectorAll('.inst-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
         document.querySelectorAll('.inst-tab-content').forEach(c => c.style.display = 'none');
         document.getElementById('inst-tab-' + tab).style.display = 'block';
+        if (currentInstId && currentInstId !== '__new__') setHash('instances/' + currentInstId + '/' + tab);
         if (tab === 'manifest') loadManifestTab();
         if (tab === 'files') loadFilesTab();
         if (tab === 'changelog') renderChangelogTab();
@@ -2088,7 +2142,7 @@ ${parts.map((p, i) => {
     // Boot
     if (isAuthed()) {
         document.getElementById('login-screen').classList.add('hidden');
-        loadPage('dashboard');
+        initFromHash();
     }
 </script>
 </body>
