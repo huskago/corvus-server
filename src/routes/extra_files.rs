@@ -155,6 +155,8 @@ pub async fn scan(
         return Err(AppError::NotFound(format!("instance '{id}' not found")));
     }
 
+    let _guard = state.write_lock.lock().await;
+
     let manifest = storage::read_manifest(&state.data_dir, &id)
         .await
         .map_err(AppError::Storage)?;
