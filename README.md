@@ -10,6 +10,9 @@ Built with [Axum](https://github.com/tokio-rs/axum) and Tokio. All data is store
 - Launcher auto-update hosting, serves `latest.json` and binaries for the Tauri updater
 - GitHub Actions build trigger from the admin panel (optional)
 - Per-instance manifest management (mods, resource packs, shaders, extra files)
+- Extra files tree with recursive folder support and public download endpoint
+- Phantom file detection (`/scan`) and one-shot integration into the manifest (`/integrate`)
+- SHA-1 rehash to recompute checksums for all indexed files (`/rehash`)
 - Streaming file upload with SHA-1 checksums and configurable size limit
 - JWT authentication with Argon2 password hashing
 - Built-in admin panel served at `/admin`
@@ -91,8 +94,11 @@ data/
 │   └── {game_dir}/
 │       ├── manifest.json
 │       ├── files.json
-│       └── files/
-│           └── *.jar / *.zip
+│       ├── extra-files.json
+│       ├── files/
+│       │   └── *.jar / *.zip
+│       └── extra/
+│           └── **/*   (arbitrary nested files)
 └── launcher-updates/
     └── {platform}/
         ├── corvus_{version}_x64-setup.exe
@@ -129,6 +135,7 @@ Login is rate-limited to 10 attempts per IP per 60 seconds.
 | `GET` | `/news.json` | News list (pinned items sorted first)                                                                                               |
 | `GET` | `/{game_dir}/manifest.json` | Instance manifest                                                                                                                   |
 | `GET` | `/files/{game_dir}/{filename}` | Download a file                                                                                                                     |
+| `GET` | `/extra/{id}/{*path}` | Download an extra file (arbitrary path)                                                                                             |
 | `GET` | `/updates/latest.json` | Tauri updater endpoint, returns version, notes, pub_date, and per-platform URLs/signatures. Returns 404 if no release is configured |
 | `GET` | `/updates/{platform}/{filename}` | Serve a launcher binary or `.sig` file                                                                                              |
 | `GET` | `/admin` | Admin panel                                                                                                                         |
@@ -162,11 +169,37 @@ News items have a `pinned` boolean field (default `false`). Pinned items appear 
 |--------|------|-------------|
 | `GET` | `/api/admin/instances/{id}/manifest` | Get manifest |
 | `PUT` | `/api/admin/instances/{id}/manifest` | Replace manifest |
-| `POST` | `/api/admin/instances/{id}/upload` | Upload files (`multipart/form-data`) |
+| `PATCH` | `/api/admin/instances/{id}/manifest/entry` | Update a single manifest entry's status |
+| `POST` | `/api/admin/instances/{id}/upload` | Upload mod/resource pack/shader files (`multipart/form-data`) |
 | `GET` | `/api/admin/instances/{id}/files` | List uploaded files |
 | `DELETE` | `/api/admin/instances/{id}/files/{filename}` | Delete a file |
 
 Upload accepts `.jar` and `.zip` only. Files are streamed to disk and SHA-1 is computed incrementally. The size limit is set by `max_upload_mb` in the config (default 512 MB).
+
+`PATCH /api/admin/instances/{id}/manifest/entry` body: `{"name": "mod.jar", "section": "mods", "status": "required"}`. Valid sections: `mods`, `resourcePacks`, `shaders`.
+
+### Extra Files
+
+Per-instance arbitrary files served publicly at `/extra/{id}/{*path}`. Organized in a recursive folder tree.
+
+| Method | Path | Description                                                           |
+|--------|------|-----------------------------------------------------------------------|
+| `GET` | `/api/admin/instances/{id}/extra-files/tree` | List files and subdirectories at `?dir=` (default: root)              |
+| `POST` | `/api/admin/instances/{id}/extra-files/mkdir` | Create a directory, body: `{"path": "subdir/name"}`                   |
+| `POST` | `/api/admin/instances/{id}/extra-files/upload` | Upload extra files (`multipart/form-data`, `?dir=` for target folder) |
+| `DELETE` | `/api/admin/instances/{id}/extra-files/{*path}` | Delete an extra file                                                  |
+
+### Scan, Integrate & Rehash
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/admin/instances/{id}/scan` | Detect files on disk that are not indexed in the manifest |
+| `POST` | `/api/admin/instances/{id}/integrate` | Index untracked files into the manifest and compute their SHA-1 |
+| `POST` | `/api/admin/instances/{id}/rehash` | Recompute SHA-1 for all already-indexed files; returns `{"updated": N}` |
+
+`/scan` returns `{"files": [...], "extra_files": [...]}`, phantom entries in both the `files/` and `extra/` directories.
+
+`/integrate` body: `{"files": [{"name": "mod.jar", "section": "mods", "status": "required"}], "extra_files": [{"path": "config/file.json"}]}`. Hashes each file, writes entries to `files.json` / `extra-files.json`, and updates `manifest.json`.
 
 ### Launcher Updates
 
